@@ -166,6 +166,7 @@ pub(crate) struct Inner {
     ordinary_threads: Mutex<Vec<std::thread::JoinHandle<()>>>,
     main_commands: OnceLock<crate::threads::MainSender>,
     pub(crate) audio: OnceLock<crate::audio::LinkHandle>,
+    pub(crate) screen_server: OnceLock<treelink_screen::ScreenServer>,
     pub(crate) dnd: OnceLock<crate::dnd::LinkHandle>,
     pub(crate) input_trace: OnceLock<Arc<crate::diagnostics::input_trace::InputTrace>>,
     pub(crate) diagnostics: OnceLock<crate::diagnostics::collection::Collector>,
@@ -423,6 +424,7 @@ impl Node {
                 capture_reports_key_repeat: opts.capture_reports_key_repeat,
                 ordinary_threads: Mutex::new(Vec::new()),
                 main_commands: OnceLock::new(),
+                screen_server: OnceLock::new(),
                 #[cfg(target_os = "macos")]
                 file_provider: Mutex::new(crate::file_provider::State::new(&data_dir)),
                 #[cfg(target_os = "macos")]
@@ -610,6 +612,9 @@ impl Node {
         if let Some(audio) = self.inner.audio.get() {
             audio.stop();
         }
+        if let Some(screen) = self.inner.screen_server.get() {
+            screen.stop();
+        }
         if let Some(clip) = self.clipboard() {
             clip.shutdown().await;
         }
@@ -790,7 +795,12 @@ impl Node {
         // A summary push means its content changed, regardless of which caller
         // requested the refresh. Queries/initial view loading read live state.
         let changed = match &ev {
-            ApiEvent::Group(g) => replace_changed(&self.inner.last_group, &crate::event_delivery::group_state(g)),
+            ApiEvent::Group(g) => {
+                if let (Some(screen), Some(group_id)) = (self.inner.screen_server.get(), g.id) {
+                    screen.set_auth_token(treelink_screen::derive_group_token(&group_id.0.to_hex()));
+                }
+                replace_changed(&self.inner.last_group, &crate::event_delivery::group_state(g))
+            }
             ApiEvent::Overview(o) => replace_changed(&self.inner.last_overview, o),
             ApiEvent::Audio(a) => replace_changed(&self.inner.last_audio, &crate::event_delivery::audio_state(a)),
             ApiEvent::Pause(p) => replace_changed(&self.inner.last_pause, p),

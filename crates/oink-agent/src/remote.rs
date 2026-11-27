@@ -913,6 +913,12 @@ impl AgentApi for RemoteApi {
     fn reset_group_state(&self) -> ApiResult<()> {
         self.call(Request::ResetGroupState)
     }
+    fn remote_desktop_status(&self) -> ApiResult<RemoteDesktopStatus> {
+        self.call(Request::RemoteDesktopStatus)
+    }
+    fn request_screen_recording_permission(&self) -> ApiResult<bool> {
+        self.call(Request::RequestScreenRecordingPermission)
+    }
     fn show_window(&self) -> ApiResult<()> {
         self.call(Request::ShowWindow)
     }

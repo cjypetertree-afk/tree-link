@@ -1,8 +1,8 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "Oink",
+  "productName": "TREE LINK",
   "version": "0.3.7",
-  "identifier": "com.hachiwii.oink.ui",
+  "identifier": "com.treelink.app.ui",
   "build": {
     "frontendDist": "../dist",
     "devUrl": "http://localhost:1440",
@@ -12,7 +12,7 @@
   "app": {
     "windows": [],
     "security": {
-      "csp": "default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; connect-src ipc: http://ipc.localhost"
+      "csp": "default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; connect-src ipc: http://ipc.localhost ws:"
     }
   },
   "bundle": {

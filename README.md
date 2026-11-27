@@ -1,54 +1,43 @@
-<p align="center">
-  <picture>
-    <source media="(prefers-color-scheme: dark)" srcset=".github/assets/banner-dark.png">
-    <img alt="Oink — Oink Is Not only a KVM. Your computers, working as one." src=".github/assets/banner-light.png" width="860">
-  </picture>
-</p>
+# TREE LINK — Multi-Computer Interconnection & Real-Time Remote Desktop Control
 
-# Oink — Oink Is Not only a KVM
+**English** | [简体中文](README.zh-CN.md) | [Architecture & Design (ZH)](docs/REMOTE_DESKTOP_DESIGN.md)
 
-**English** | [简体中文](README.zh-CN.md) | [日本語](README.ja.md) | [한국어](README.ko.md)
+> **Derivative Work Notice (GPL-3.0-only + Section 7 Attribution):**
+> **TREE LINK** is a modified derivative work based on **[Oink](https://github.com/oinkvm/oink)** (`v0.3.7`, GPL-3.0-only with [additional terms](LICENSE-ADDITIONAL-TERMS.md)). Original Oink notices, copyright attributions, and third-party license inventories are preserved in [`LICENSE`](LICENSE), [`LICENSE-ADDITIONAL-TERMS.md`](LICENSE-ADDITIONAL-TERMS.md), [`NOTICE`](NOTICE), and [`THIRD_PARTY_LICENSES.md`](THIRD_PARTY_LICENSES.md). TREE LINK is an independent derivative project and is not endorsed by or presented as the original Oink.
 
-Oink, short for "Oink Is Not only a KVM", is modern software that builds a peer-to-peer sharing network across multiple Windows and Mac computers. Use the keyboard, mouse and trackpad of any device to control any nearby device, with the same native feel everywhere; play the audio of several devices through the speakers or headphones connected to one of them; share the clipboard and drag and drop between devices; discover devices on the local network automatically; all traffic is encrypted by default.
+## What TREE LINK Adds on Top of Oink
 
-## Install
+TREE LINK retains all core Oink peer-to-peer capabilities — **native keyboard/mouse/trackpad KVM**, **bidirectional clipboard sync**, **cross-OS file transfer & drag-and-drop**, and **low-latency multi-device audio mixing & microphone forwarding** — and extends it with:
 
-Get installers and matching source from [GitHub Releases](https://github.com/oinkvm/oink/releases).
+1. **Real-Time Multi-Mac Desktop Viewing & Control on Windows (`crates/treelink-screen` + `apps/oink/src/remote-desktop`)**
+   - View and control **multiple Macs simultaneously** (side-by-side split, stacked split, or single focus) directly on your Windows monitor.
+   - **macOS Native Capture & Hardware Encoding**: Built on `ScreenCaptureKit` + `VideoToolbox` hardware H.264 / HEVC (`RealTime`, zero B-frames, 60fps, multi-display switching, dynamic keyframe recovery).
+   - **Windows Hardware Decoding**: WebCodecs (`VideoDecoder`) hardware-accelerated rendering inside WebView2 / Chromium.
+   - **Developer-Friendly Remote Input**: Pixel-accurate absolute pointer mapping, drag/scroll support, USB HID keyboard injection (`oink_input::mac_keymap`), toggleable `Ctrl ↔ ⌘Cmd` shortcut mode, quick `⌘Space` / `⌘Tab` triggers, and automatic anti-stuck-key cleanup on blur/disconnect.
+2. **Unified LAN IP & Direct-Cable Networking (`169.254.0.0/16` + Wired Priority)**
+   - Works seamlessly across **Gigabit/2.5G Ethernet LAN**, **Thunderbolt / USB4 Bridge**, **direct Ethernet cable (`169.254.x.x`)**, and **Wi-Fi**.
+   - Automatic interface ranking prioritizes direct-cable (`169.254/16`, Thunderbolt/USB4) and wired Ethernet links ahead of Wi-Fi, with automatic group-derived authentication tokens and manual IP override.
 
-Supported operating systems and versions:
+## Quick Start
 
-- **Mac:** Apple silicon (arm64), macOS 14.2+; Intel (x64), macOS 14.2+ (untested)
-- **Windows:** x64, Windows 10 version 1809 (build 17763) or later, or Windows 11. Windows 10 versions before 22H2 are untested. Windows 10 LTSC (such as LTSC 2019 / LTSC 2021) does not include the WebView2 Runtime; install the Microsoft Edge WebView2 Runtime (Evergreen) first: https://developer.microsoft.com/microsoft-edge/webview2/
+### Build Locally (macOS Apple Silicon)
 
-If SmartScreen says "Windows protected your PC", use **More info → Run anyway** only if offered. UAC may show an unknown publisher.
+```bash
+# 1. Build and test TREE LINK remote desktop engine + standalone host CLI
+cargo test -p treelink-screen
+cargo run -p treelink-screen --bin treelink-screen-host
 
-### Sponsor
+# 2. Build frontend & verify tests
+npm ci
+npm run -w apps/oink typecheck
+npm run -w apps/oink test
+npm run -w apps/oink build
+```
 
-If this project helps you, consider sponsoring some of my AI subscription costs. Those tokens help make Oink better.
+### Automated Cross-Platform Builds (Windows x64 + macOS arm64)
 
-<a href="https://ko-fi.com/hachiwii"><img alt="Ko-fi" src="https://ko-fi.com/img/githubbutton_sm.svg" height="36"></a>
-
-## Contributing
-
-This project does not accept pull requests without context, because there is no one to review the code. Please use [Issues](https://github.com/oinkvm/oink/issues) for all bug reports and feature requests. When you report a problem, please include your device environment, diagnostic data, steps to reproduce and your AI-assisted investigation's conclusions. Using Oink in real environments and sending feedback is the biggest contribution to this project.
-
-## FAQ
-
-**Is Oink based on, or compatible with, Deskflow?**\
-No. Oink is a project started completely from scratch. It uses its own peer-to-peer (not client–server) protocol and is not compatible with other software KVMs.
-
-**Do I have to designate one device as the controller?**\
-No. Oink uses a peer-to-peer design: the keyboard and mouse connected to any device can control the other devices.
-
-**Can I share trackpad gestures?**\
-Yes, but trackpads on Windows have not been tested.
-
-**Does it support clipboard sharing and drag and drop across operating systems?**\
-Yes. The clipboard is synced across devices automatically, and you can drag text, images and files directly from one device to another — even straight into apps such as Chrome.
-
-**Do I need to buy a license for personal or commercial use?**\
-No. Oink is free software released under GPL-3.0-only with additional terms, so you can use it for any personal or commercial purpose without asking for any further license. If you distribute Oink or a modified version of it, you must provide the complete source code under the same license, keep the original author attribution and license notices, and mark your changes; under the additional terms you also may not use the Oink name to promote derived products. Modifying Oink only for your own use, without distributing it, carries none of these obligations.
+Push to GitHub or trigger the **TREE LINK Build & Test** workflow (`.github/workflows/treelink-build.yml`) in GitHub Actions to build both Windows x64 and macOS arm64 artifacts automatically.
 
 ## License
 
-This project is licensed under [GPL-3.0-only](LICENSE) with [additional terms](LICENSE-ADDITIONAL-TERMS.md).
+TREE LINK is released under **[GPL-3.0-only](LICENSE)**, retaining upstream **[additional terms](LICENSE-ADDITIONAL-TERMS.md)** and **[NOTICE](NOTICE)** from Oink.

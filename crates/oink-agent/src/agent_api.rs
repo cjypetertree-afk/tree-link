@@ -1941,6 +1941,63 @@ impl AgentApi for Node {
     fn reopen_oink(&self) -> ApiResult<()> {
         crate::backend::reopen()
     }
+    fn remote_desktop_status(&self) -> ApiResult<RemoteDesktopStatus> {
+        let group = self.link_config()?;
+        let group_hex = group.applied().group.to_hex();
+        let auth_token = treelink_screen::derive_group_token(&group_hex);
+        let local_host = if let Some(server) = self.inner.screen_server.get() {
+            server.set_auth_token(auth_token.clone());
+            server.status()
+        } else {
+            treelink_screen::HostStatus {
+                running: false,
+                port: treelink_screen::DEFAULT_SCREEN_PORT,
+                host_capture_supported: treelink_screen::host_capture_supported(),
+                active_viewers: 0,
+                permissions: treelink_screen::permissions(),
+            }
+        };
+        let me = self.id();
+        let links = self.links().ok().map(|l| l.links());
+        let peers = self
+            .group_members()
+            .into_iter()
+            .filter(|id| *id != me)
+            .map(|id| {
+                let summary = device_summary(self, id);
+                let mut raw_ips = Vec::new();
+                if let Some(live_addr) = links
+                    .as_ref()
+                    .and_then(|l| l.by_peer(id))
+                    .and_then(|entry| entry.remote_address)
+                {
+                    raw_ips.push(live_addr.to_string());
+                }
+                if let Ok(saved) = group.member_addresses(id) {
+                    raw_ips.extend(saved);
+                }
+                let ranked_ips = treelink_screen::rank_peer_ips(&raw_ips);
+                let online = links.as_ref().is_some_and(|l| l.ready(id));
+                RemoteDesktopPeer {
+                    device: id.into(),
+                    name: summary.name,
+                    os: summary.os,
+                    online,
+                    default_port: treelink_screen::DEFAULT_SCREEN_PORT,
+                    ranked_ips,
+                }
+            })
+            .collect();
+        Ok(RemoteDesktopStatus {
+            local_host,
+            auth_token,
+            local_interfaces: treelink_screen::rank_local_interfaces(),
+            peers,
+        })
+    }
+    fn request_screen_recording_permission(&self) -> ApiResult<bool> {
+        Ok(treelink_screen::request_screen_recording_permission())
+    }
     fn show_window(&self) -> ApiResult<()> {
         self.emit(ApiEvent::ShowWindow);
         Ok(())

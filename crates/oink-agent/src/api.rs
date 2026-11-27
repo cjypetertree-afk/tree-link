@@ -2161,12 +2161,44 @@ pub trait AgentApi: Send + Sync {
     /// 「重置回初始状态」：只在组状态读不出来（[`AlertKind::GroupStateUnreadable`]）时可用。旧文件改名保留，
     /// 写入一个新的单机组（新的组编号和组密钥、默认设置），然后启动共享。要重新配对。
     fn reset_group_state(&self) -> ApiResult<()>;
+    /// TREE LINK remote desktop server status, group token, and ranked direct-cable/LAN peer IPs.
+    fn remote_desktop_status(&self) -> ApiResult<RemoteDesktopStatus> {
+        Err(ApiError::Unsupported {
+            message: "remote desktop unavailable".into(),
+        })
+    }
+    /// Request macOS Screen Recording permission needed for remote desktop capture.
+    fn request_screen_recording_permission(&self) -> ApiResult<bool> {
+        Ok(treelink_screen::request_screen_recording_permission())
+    }
     // 事件
     fn subscribe(&self, sink: EventSink) -> SubscriptionId;
     fn unsubscribe(&self, id: SubscriptionId);
 }
 
 // ─────────────────────── 请求 / 应答（线上格式） ───────────────────────
+
+/// TREE LINK remote desktop peer endpoint descriptor with direct-cable/wired IP priority.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RemoteDesktopPeer {
+    pub device: DeviceKey,
+    pub name: String,
+    pub os: Os,
+    pub online: bool,
+    pub default_port: u16,
+    pub ranked_ips: Vec<treelink_screen::LinkInterfaceInfo>,
+}
+
+/// TREE LINK remote desktop host status, group auth token, and ranked peer endpoints.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RemoteDesktopStatus {
+    pub local_host: treelink_screen::HostStatus,
+    pub auth_token: String,
+    pub local_interfaces: Vec<treelink_screen::LinkInterfaceInfo>,
+    pub peers: Vec<RemoteDesktopPeer>,
+}
 
 /// 一次 API 调用，与 [`AgentApi`] 的方法一一对应。JSON：`{"method": "connect_device", "params": {"device": "..."}}`。
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -2489,6 +2521,8 @@ pub enum Request {
     SetFileProviderPlaceholderPool {
         enabled: bool,
     },
+    RemoteDesktopStatus,
+    RequestScreenRecordingPermission,
 }
 
 /// 调用结果。序列化时只输出内容本身（无标签），`Unit` 为 `null`。
@@ -2546,6 +2580,8 @@ pub enum Reply {
     LaunchAtLoginStatus(LaunchAtLoginStatus),
     Wallpapers(Vec<ScreenWallpaper>),
     FileProviderPlaceholderPool(FileProviderPlaceholderStatus),
+    RemoteDesktopStatus(RemoteDesktopStatus),
+    ScreenRecordingGranted(bool),
 }
 
 fn default_diagnostics_minutes() -> Option<u32> {
@@ -2778,6 +2814,10 @@ pub fn dispatch<A: AgentApi + ?Sized>(api: &A, req: Request) -> ApiResult<Reply>
         R::ShowWindow => unit(api.show_window()),
         R::ReopenOink => unit(api.reopen_oink()),
         R::ResetGroupState => unit(api.reset_group_state()),
+        R::RemoteDesktopStatus => api.remote_desktop_status().map(Reply::RemoteDesktopStatus),
+        R::RequestScreenRecordingPermission => api
+            .request_screen_recording_permission()
+            .map(Reply::ScreenRecordingGranted),
     }
 }
 

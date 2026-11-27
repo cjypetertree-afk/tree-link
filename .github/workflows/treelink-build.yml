@@ -1,0 +1,95 @@
+name: TREE LINK Build & Test
+
+on:
+  push:
+    branches: [main, dev/remote-desktop]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: treelink-build-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: '0'
+  MACOSX_DEPLOYMENT_TARGET: '14.2'
+  CMAKE_POLICY_VERSION_MINIMUM: '3.5'
+  npm_config_engine_strict: 'false'
+
+jobs:
+  frontend:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24.14.1'
+          cache: npm
+          cache-dependency-path: package-lock.json
+      - name: Install dependencies & verify frontend
+        run: |
+          npm ci
+          npm run -w apps/oink typecheck
+          npm run -w apps/oink test
+          npm run -w apps/oink build
+
+  build:
+    needs: frontend
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-15
+            platform: macos-arm64
+            target: aarch64-apple-darwin
+          - os: windows-2022
+            platform: windows-x64
+            target: x86_64-pc-windows-msvc
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: '1.99.0'
+          components: rustfmt, clippy
+          targets: ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: treelink-${{ matrix.target }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24.14.1'
+          cache: npm
+          cache-dependency-path: package-lock.json
+      - name: Build frontend dist for Tauri bundle
+        run: |
+          npm ci
+          npm run -w apps/oink build
+      - name: Test & lint treelink-screen
+        run: |
+          cargo test -p treelink-screen --target ${{ matrix.target }}
+          cargo clippy -p treelink-screen --all-targets --target ${{ matrix.target }} -- -D warnings
+      - name: Build TREE LINK backend & desktop UI binaries
+        run: |
+          cargo build --release --target ${{ matrix.target }} -p treelink-screen --bin treelink-screen-host
+          cargo build --release --target ${{ matrix.target }} -p oink-agent --bin oink-backend
+          cargo build --release --target ${{ matrix.target }} -p oink-ui --bin oink
+      - name: Stage release binaries
+        shell: bash
+        run: |
+          mkdir -p dist-stage
+          ext=""
+          if [[ "${{ runner.os }}" == "Windows" ]]; then ext=".exe"; fi
+          cp "target/${{ matrix.target }}/release/treelink-screen-host${ext}" dist-stage/
+          cp "target/${{ matrix.target }}/release/oink-backend${ext}" dist-stage/
+          cp "target/${{ matrix.target }}/release/oink${ext}" "dist-stage/tree-link${ext}"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: tree-link-${{ matrix.platform }}
+          path: dist-stage/*
+          if-no-files-found: error

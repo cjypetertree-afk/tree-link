@@ -115,6 +115,9 @@ export const api = {
 
   openLaunchAtLoginSettings: () => call<null>("open_launch_at_login_settings"),
 
+  remoteDesktopStatus: () => call<import('../remote-desktop/protocol').RemoteDesktopStatus>("remote_desktop_status"),
+  requestScreenRecordingPermission: () => call<boolean>("request_screen_recording_permission"),
+
 };
 
 export const shell = {

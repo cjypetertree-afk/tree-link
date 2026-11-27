@@ -56,7 +56,8 @@ it('keeps the WebView CSP and capabilities closed to remote images and connectio
     const [name, ...sources] = value.trim().split(/\s+/); return [name, sources];
   }));
   expect(directives['img-src']).toEqual(["'self'", 'data:']);
-  expect(directives['connect-src']).toEqual(['ipc:', 'http://ipc.localhost']);
+  // TREE LINK allows ws: for authenticated LAN/direct-cable remote desktop streaming.
+  expect(directives['connect-src']).toEqual(['ipc:', 'http://ipc.localhost', 'ws:']);
   const capabilities = JSON.parse(readFileSync(new URL('../../src-tauri/capabilities/default.json', import.meta.url), 'utf8'));
   expect(capabilities.remote).toBeUndefined();
   expect(capabilities.permissions.some((p: string) => p.startsWith('http:'))).toBe(false);

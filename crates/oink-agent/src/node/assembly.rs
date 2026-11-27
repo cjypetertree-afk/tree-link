@@ -298,6 +298,29 @@ impl Node {
                 .map_err(|_| anyhow::anyhow!("drag task already started"))?;
             tasks.push(dnd_task);
         }
+        if self.inner.profile == Profile::User && self.inner.screen_server.get().is_none() {
+            let screen_port = if self.inner.network.port == 0 {
+                0
+            } else {
+                treelink_screen::DEFAULT_SCREEN_PORT
+            };
+            let auth_token = treelink_screen::derive_group_token(&group.applied().group.to_hex());
+            match treelink_screen::ScreenServer::start(treelink_screen::ServerConfig {
+                bind_ip: self.inner.network.bind_ip,
+                port: screen_port,
+                device_name: self.device_name(self.id()),
+                auth_token,
+            })
+            .await
+            {
+                Ok(server) => {
+                    let _ = self.inner.screen_server.set(server);
+                }
+                Err(error) => {
+                    tracing::warn!(%error, "TREE LINK remote desktop server unavailable");
+                }
+            }
+        }
         tasks.extend(self.start_prelogin_export());
         lock(&self.inner.tasks).extend(tasks);
         self.start_main_commands(receive)?;

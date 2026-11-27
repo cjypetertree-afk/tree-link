@@ -16,6 +16,7 @@ members = [
     "crates/oink-crash",
     "crates/oink-audio",
     "crates/oink-autostart",
+    "crates/treelink-screen",
     "apps/oink/src-tauri",
     "tests/support",
 ]
@@ -44,6 +45,7 @@ oink-telemetry = { path = "crates/oink-telemetry" }
 oink-crash = { path = "crates/oink-crash" }
 oink-audio = { path = "crates/oink-audio" }
 oink-autostart = { path = "crates/oink-autostart" }
+treelink-screen = { path = "crates/treelink-screen" }
 
 # 各模块共用的第三方依赖。模块专用的依赖写在各自 crate 的 Cargo.toml 里。
 anyhow = "1"

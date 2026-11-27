@@ -60,6 +60,7 @@ import type { PermissionId } from './settings/prefs';
 import type { SectionId } from './settings/schema';
 import { problemText, tr, useLanguage } from './i18n';
 import { version } from './version';
+import { RemoteWorkbench } from './remote-desktop/RemoteWorkbench';
 import './settings/settings.css';
 async function windowAction(action: 'minimize' | 'toggleMaximize' | 'close') {
     if (!inTauri)
@@ -124,6 +125,7 @@ export function App() {
     const [maximized,setMaximized] = useState(false);
     const [windowActive,setWindowActive] = useState(true);
     const [navMode, setNavModeState] = useState<'devices' | 'add' | 'settings'>('devices');
+    const [workspaceMode, setWorkspaceMode] = useState<'arrange' | 'remote'>('arrange');
     const [navSwitched,setNavSwitched] = useState(false);
     const [settingsMounted,setSettingsMounted] = useState(false);
     const [screenOnly,setScreenOnly] = useState(false);
@@ -698,7 +700,7 @@ export function App() {
                     : <SideContextMenu {...menu}>
       <DesktopWindow ref={mergeRefs(setWinEl)} platform={platform} covered={packageDrag || onboarding && onboard !== 'leaving'} coverBar={packageDrag ? <span className="package-drop-title">Oink</span> : onboarding && <OnboardingLanguage value={prefs.prefs.language} leaving={onboard === 'leaving'} onChange={v => prefs.set('language', v)}/>}
         cover={packageDrag ? <PackageDropArea platform={platform}/> : onboarding && <Onboarding key={onboardKey} platform={platform} pairing={pairing} perms={permissions} onGrant={grant} onOpenSettings={openPermissionSettings} preferences={prefs} container={winEl} leaving={onboard === 'leaving'} version={state.boot?.version ?? version} connected={devices.some(d => d.group === 'online')} onSkip={finishOnboarding} onFinish={finishOnboarding}/>}
-        state={{ maximized, minimized: false, closed: false }} active={windowActive} title={tr('显示器排列')} onMinimize={() => { void windowAction('minimize'); }} onToggleMaximize={() => { void windowAction('toggleMaximize'); }} onClose={() => { void windowAction('close'); }} onActivate={() => { }} navOpen={!remotePaused && navOpen} onSideBlank={clearSelection} onToggleNav={() => { if (remotePaused) return; if (navOpen) clearSelection(); setNavOpen(!navOpen); if (navMode !== 'devices')
+        state={{ maximized, minimized: false, closed: false }} active={windowActive} title={workspaceMode === 'remote' ? (language === 'zh-Hans' ? 'TREE LINK 实时控屏' : 'TREE LINK Remote Desktop') : tr('显示器排列')} onMinimize={() => { void windowAction('minimize'); }} onToggleMaximize={() => { void windowAction('toggleMaximize'); }} onClose={() => { void windowAction('close'); }} onActivate={() => { }} navOpen={!remotePaused && navOpen} onSideBlank={clearSelection} onToggleNav={() => { if (remotePaused) return; if (navOpen) clearSelection(); setNavOpen(!navOpen); if (navMode !== 'devices')
                         setNavMode('devices'); }} pages={{ add: navMode === 'add', settings: navMode === 'settings' }} onSideAction={action => { if (action === 'quit') {
                         if (prefs.prefs.confirmQuit)
                             setQuitAsk(true);
@@ -708,13 +710,13 @@ export function App() {
                     else if (!remotePaused) {
                         setNavOpen(true);
                         setNavMode(navMode === action ? 'devices' : action);
-                    } }} version={state.boot?.version ?? version} sideExtra={navMode === 'add' ? <SelfInfo container={winEl}/> : null} titleEnd={<><UpgradeButton/><PromoArea sponsor={!prefs.presentation.hide_sponsor} container={winEl}/></>} titleCenter={self?.paused ? <span className="win__paused"><PauseGlyph/>{tr('共享已暂停')}</span> : null} navBack={!remotePaused && platform === 'win' && navMode !== 'devices' ? { title: navMode === 'add' ? tr('添加设备') : tr('设置'), label: tr('返回设备列表'), onBack: () => setNavMode('devices') } : null} nav={collapsed => remotePaused ? null : <>
+                    } }} version={state.boot?.version ?? version} sideExtra={navMode === 'add' ? <SelfInfo container={winEl}/> : null} titleEnd={<><Button variant={workspaceMode === 'remote' ? 'accent' : 'ghost'} size="sm" onClick={() => { if (navMode === 'settings') setNavMode('devices'); setWorkspaceMode(m => m === 'remote' ? 'arrange' : 'remote'); }}>{workspaceMode === 'remote' ? (language === 'zh-Hans' ? '返回屏幕排列' : 'Displays') : (language === 'zh-Hans' ? '实时控屏' : 'Remote Desktop')}</Button><UpgradeButton/><PromoArea sponsor={!prefs.presentation.hide_sponsor} container={winEl}/></>} titleCenter={self?.paused ? <span className="win__paused"><PauseGlyph/>{tr('共享已暂停')}</span> : null} navBack={!remotePaused && platform === 'win' && navMode !== 'devices' ? { title: navMode === 'add' ? tr('添加设备') : tr('设置'), label: tr('返回设备列表'), onBack: () => setNavMode('devices') } : null} nav={collapsed => remotePaused ? null : <>
           <div className="nav-stack">
             {platform === 'win' && <RequestsGroup pairing={pairing} collapsed={collapsed} onExpand={() => setNavOpen(true)} hidden={navMode === 'settings'}/>}
             <div className="nav-view" key={navMode} data-view={navMode} data-anim={navSwitched ? '' : undefined}>{platform === 'mac' && <><AddHead open={navMode !== 'devices'} title={navMode === 'add' ? tr('添加设备') : tr('设置')} onBack={() => setNavMode('devices')}/><RequestsGroup pairing={pairing} collapsed={collapsed} onExpand={() => setNavOpen(true)} hidden={navMode === 'settings'}/></>}{navMode === 'add' ? <AddPanel pairing={pairing}/> : navMode === 'settings' ? <SettingsNav platform={platform} query={query} onQuery={setQuery} active={section} onJump={id => setJump({ section: id, n: Date.now() })}/> : <DeviceList onGrantPermission={grantDevicePermission} onGrantAccessibility={() => { void accessibilityGrant.grant('accessibility'); }} devices={devices} selectedId={selectedDevice} onSelect={id => { setNavOpen(true); selectDevice(id); }} onToggle={toggle} onPause={menu.onPause} onSpeaker={menu.onSpeaker} onMicrophone={microphone} hiddenScreens={hiddenScreens} collapsed={collapsed} now={Date.now()} onReorder={(id, placement) => api.moveDeviceOrder(id, placement)}/>}</div>
           </div>
         </>}>
-        {remotePaused ? <div className="disp"><div className="disp__canvas"><StartupPanel raw="rdp"/></div></div> : <div className="disp" data-hidden={navMode === 'settings' ? '' : undefined} aria-hidden={navMode === 'settings' || undefined} inert={navMode === 'settings'}>
+        {remotePaused ? <div className="disp"><div className="disp__canvas"><StartupPanel raw="rdp"/></div></div> : workspaceMode === 'remote' && navMode !== 'settings' ? <div className="disp"><RemoteWorkbench devices={devices} onToggleSpeakerMute={id => speaker(id, { type: 'mute' })}/></div> : <div className="disp" data-hidden={navMode === 'settings' ? '' : undefined} aria-hidden={navMode === 'settings' || undefined} inert={navMode === 'settings'}>
           <VisuallyHidden id={hint}>{tr('方向键移动位置；Command 或 Ctrl 加方向键缩放；Shift 微调按键、拖动或缩放时按住可关闭吸附；Esc 取消选中')}</VisuallyHidden>
           <div className="disp__canvas" ref={canvas} aria-busy={savingLayout}>
             <div className="canvas-tools" role="toolbar" aria-label={tr('排列操作')}>

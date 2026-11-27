@@ -1,54 +1,39 @@
-<p align="center">
-  <picture>
-    <source media="(prefers-color-scheme: dark)" srcset=".github/assets/banner-zh-CN-dark.png">
-    <img alt="Oink — Oink Is Not only a KVM。你的电脑，合而为一" src=".github/assets/banner-zh-CN-light.png" width="860">
-  </picture>
-</p>
+# TREE LINK — 电脑互联与多机实时操控
 
-# Oink — Oink Is Not only a KVM
+[English](README.md) | **简体中文** | [架构设计文档](docs/REMOTE_DESKTOP_DESIGN.md)
 
-[English](README.md) | **简体中文** | [日本語](README.ja.md) | [한국어](README.ko.md)
+> **开源衍生项目声明（GPL-3.0-only 及附加条款）：**
+> **TREE LINK** 是基于开源项目 **[Oink](https://github.com/oinkvm/oink)** (`v0.3.7`) 修改开发的衍生项目。本项目完整保留原作者署名及 [`LICENSE`](LICENSE)、[`LICENSE-ADDITIONAL-TERMS.md`](LICENSE-ADDITIONAL-TERMS.md)、[`NOTICE`](NOTICE) 与 [`THIRD_PARTY_LICENSES.md`](THIRD_PARTY_LICENSES.md) 法律声明，并明确标注全部新增与修改内容；本项目为独立衍生作品，不以原版 Oink 名义宣传或背书。
 
-Oink 是 Oink Is Not only a KVM 的缩写，是一款在多台 Windows 和 Mac 设备间建立对等共享网络的现代软件。同时使用任何设备的键盘、鼠标、触摸板操控任意邻近设备，保持统一、原生的操作手感；将多台设备的音频通过连接至一台设备的扬声器或耳机播放；支持剪贴板共享和跨设备拖拽；支持局域网设备自动发现；默认加密传输。
+## 核心特性
 
-## 安装
+TREE LINK 完整保留了 Oink 优秀的底层跨平台能力——**原生键鼠/触控板共享、双向剪贴板同步、文件互传与跨设备拖拽、低延迟多机音频混音与麦克风转发、mTLS 默认加密**，并重点新增以下核心功能：
 
-从 [GitHub Releases](https://github.com/oinkvm/oink/releases) 下载安装包和对应的源码。
+1. **Windows 单屏/多屏实时掌控多台 Mac 桌面（`crates/treelink-screen` + 实时控屏工作台）**
+   - 在你的 Windows 显示器上**同时打开并实时操控两台（或多台）Mac 桌面**，支持**左右分屏 / 上下分屏 / 单屏聚焦 / 全屏**，无需频繁抬头看其他电脑即可多机并行开发。
+   - **macOS 原生硬件采集与编码**：基于系统原生 `ScreenCaptureKit` + `VideoToolbox`（H.264 / HEVC 硬件编码，零 B 帧低延迟，最高 60fps，支持多显示器切换与动态关键帧恢复）。
+   - **Windows 硬件解码渲染**：基于 WebCodecs (`VideoDecoder`) 硬件解码直绘，清晰锐利适合写代码。
+   - **开发者友好的实时操控**：窗口内绝对坐标精准点击/拖拽/滚轮，复用 `oink-input` 原生 macOS 键位映射，一键切换 **`Ctrl ↔ ⌘Cmd` 快捷键模式**，内置 `⌘Space`、`⌘Tab`、自动防卡键保护与单机音频一键静音。
+2. **局域网 IP + 有线/雷电直连统一架构**
+   - 底层统一基于 IP 传输，无缝支持 **千兆/2.5G 有线局域网**、**网线直连 / Thunderbolt / USB4 雷电网桥（`169.254.0.0/16`）** 与 **Wi-Fi**。
+   - 内置 **多网卡智能优先级排序（`network_rank.rs`）**：自动优先选用 `169.254.x.x` 直连线缆与有线网卡，支持同组自动认证令牌与手动 IP 立即连接。
 
-支持的操作系统和版本：
+## 快速开发与构建
 
-- **Mac**：Apple 芯片（arm64），macOS 14.2 及以上；Intel（x64），macOS 14.2 及以上（未经测试）
-- **Windows**：x64，Windows 10 1809（build 17763）及以上，或 Windows 11。22H2 之前的 Windows 10 版本未经测试。Windows 10 LTSC（如 LTSC 2019 / LTSC 2021）不自带 WebView2 Runtime，请先安装 Microsoft Edge WebView2 Runtime（Evergreen）：https://developer.microsoft.com/microsoft-edge/webview2/
+```bash
+# 1. 编译与测试实时桌面引擎及独立 Mac 推流端 CLI
+cargo test -p treelink-screen
+cargo run -p treelink-screen --bin treelink-screen-host
 
-如果 SmartScreen 提示“Windows 已保护你的电脑”，仅在出现相应选项时点击 **更多信息 → 仍要运行**。UAC 可能显示发布者未知。
+# 2. 编译与测试桌面端前端界面
+npm ci
+npm run -w apps/oink typecheck
+npm run -w apps/oink test
+npm run -w apps/oink build
+```
 
-### 赞助
-
-如果这个项目帮助到了你，可以考虑赞助我一些 AI 订阅费用。这些 Token 会让 Oink 发展得更好。
-
-<a href="https://ko-fi.com/hachiwii"><img alt="Ko-fi" src="https://ko-fi.com/img/githubbutton_sm.svg" height="36"></a>
-
-## 贡献
-
-本项目不接受没有上下文的 PR，因为没有人能对代码进行 Review。欢迎通过 [Issues](https://github.com/oinkvm/oink/issues) 提交一切问题反馈和功能请求，在反馈问题时，最好能带上你的设备环境、诊断数据、复现流程和 AI 排查结论。在真实环境中使用和反馈是对该项目的最大贡献。
-
-## 常见问题
-
-**Oink 是基于 Deskflow 或兼容 Deskflow 的吗？**\
-不是。Oink 是完全从零开始的项目，使用自研的对等（非客户端-服务端）协议，不兼容其他软件 KVM。
-
-**必须指定一台设备为控制端吗？**\
-不必须。Oink 采用对等网络设计，连接在任何设备上的键鼠都可以用来控制其他设备。
-
-**支持共享触摸板手势吗？**\
-支持，但 Windows 触摸板未经过测试。
-
-**支持跨操作系统的剪贴板共享和跨设备拖拽吗？**\
-支持。剪贴板会在设备间自动同步，也可以直接将文字、图片、文件从一台设备拖拽到另一台设备，甚至直接拖进 Chrome 等应用内。
-
-**个人或商业使用 Oink 需要购买许可吗？**\
-不需要。Oink 是以 GPL-3.0-only（附带附加条款）发布的自由软件，可以用于任何个人或商业用途，无需申请额外许可。如果分发 Oink 或基于它修改的版本，必须以同一许可证提供完整源码，保留原作者署名和许可声明，并标明所做的修改；按附加条款，也不得以 Oink 的名义推广衍生产品。仅供自己使用的修改、不对外分发时，没有这些义务。
+推送到 GitHub 后，`.github/workflows/treelink-build.yml` 会自动在 GitHub Actions 上执行测试并构建 **macOS (arm64)** 与 **Windows (x64)** 双端产物。
 
 ## 许可证
 
-本项目以 [GPL-3.0-only](LICENSE) 许可证发布，并附有[附加条款](LICENSE-ADDITIONAL-TERMS.md)。
+本项目以 **[GPL-3.0-only](LICENSE)** 开源发布，并完整保留上游 Oink 的 [附加条款](LICENSE-ADDITIONAL-TERMS.md) 与 [NOTICE](NOTICE)。

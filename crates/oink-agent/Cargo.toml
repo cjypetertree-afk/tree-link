@@ -23,6 +23,7 @@ oink-network.workspace = true
 oink-protocol.workspace = true
 oink-audio.workspace = true
 oink-autostart.workspace = true
+treelink-screen.workspace = true
 thiserror.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
