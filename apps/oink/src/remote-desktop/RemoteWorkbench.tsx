@@ -22,6 +22,14 @@ export function RemoteWorkbench({ devices, onToggleSpeakerMute }: RemoteWorkbenc
   const [manualPort, setManualPort] = useState<string>('47474');
   const [manualToken, setManualToken] = useState<string>('');
   const [manualName, setManualName] = useState<string>('');
+  const [copiedUrl, setCopiedUrl] = useState<string | null>(null);
+
+  const copyQuickUrl = (url: string) => {
+    void navigator.clipboard?.writeText(url).then(() => {
+      setCopiedUrl(url);
+      window.setTimeout(() => setCopiedUrl(prev => (prev === url ? null : prev)), 2500);
+    }).catch(() => {});
+  };
 
   const refresh = useCallback(async () => {
     setLoading(true);
@@ -178,15 +186,23 @@ export function RemoteWorkbench({ devices, onToggleSpeakerMute }: RemoteWorkbenc
           </p>
           {status && status.localInterfaces.length > 0 && (
             <div className="tl-local-info">
-              <strong>本机控屏服务地址（端口 {localHost?.port ?? 47474}）：</strong>
+              <strong>本机控屏服务地址（端口 {localHost?.port ?? 47474} · 60fps HTTPS 端口 {(localHost?.port ?? 47474) + 1}）：</strong>
               <div className="tl-local-chips">
-                {status.localInterfaces.map((iface) => (
-                  <span key={`${iface.interface}:${iface.ip}`} className="tl-chip">
-                    <span className="tl-badge" data-kind={iface.linkClass}>{linkClassLabel(iface.linkClass)}</span>
-                    <code>{iface.ip}:{localHost?.port ?? 47474}</code>
-                    <span className="tl-meta">{iface.interface}</span>
-                  </span>
-                ))}
+                {status.localInterfaces.map((iface) => {
+                  const httpsPort = (localHost?.port ?? 47474) + 1;
+                  const tokenQs = status.authToken ? `?token=${encodeURIComponent(status.authToken)}` : '';
+                  const quickUrl = `https://${iface.ip}:${httpsPort}/${tokenQs}`;
+                  return (
+                    <span key={`${iface.interface}:${iface.ip}`} className="tl-chip">
+                      <span className="tl-badge" data-kind={iface.linkClass}>{linkClassLabel(iface.linkClass)}</span>
+                      <code>{iface.ip}:{localHost?.port ?? 47474}</code>
+                      <span className="tl-meta">{iface.interface}</span>
+                      <Button size="sm" variant="ghost" onClick={() => copyQuickUrl(quickUrl)}>
+                        {copiedUrl === quickUrl ? '已复制 60fps 链接' : '复制浏览器 60fps 链接'}
+                      </Button>
+                    </span>
+                  );
+                })}
               </div>
             </div>
           )}

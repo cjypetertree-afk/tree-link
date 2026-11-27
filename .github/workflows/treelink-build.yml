@@ -1,13 +1,23 @@
-name: TREE LINK Build & Test
+name: TREE LINK Build & Installers
 
 on:
   push:
     branches: [main, dev/remote-desktop]
+    tags: ['v*']
   pull_request:
   workflow_dispatch:
+    inputs:
+      publish_release:
+        description: Publish a GitHub Release with macOS .dmg and Windows .msi installers
+        type: boolean
+        default: false
+      release_tag:
+        description: Release tag name (when publish_release is true)
+        type: string
+        default: v0.3.7-treelink.1
 
 permissions:
-  contents: read
+  contents: write
 
 concurrency:
   group: treelink-build-${{ github.ref }}
@@ -37,19 +47,9 @@ jobs:
           npm run -w apps/oink test
           npm run -w apps/oink build
 
-  build:
+  package-macos:
     needs: frontend
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - os: macos-15
-            platform: macos-arm64
-            target: aarch64-apple-darwin
-          - os: windows-2022
-            platform: windows-x64
-            target: x86_64-pc-windows-msvc
-    runs-on: ${{ matrix.os }}
+    runs-on: macos-15
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
@@ -57,39 +57,95 @@ jobs:
         with:
           toolchain: '1.99.0'
           components: rustfmt, clippy
-          targets: ${{ matrix.target }}
+          targets: aarch64-apple-darwin
       - uses: Swatinem/rust-cache@v2
         with:
-          key: treelink-${{ matrix.target }}
+          key: treelink-macos-arm64
       - uses: actions/setup-node@v4
         with:
           node-version: '24.14.1'
           cache: npm
           cache-dependency-path: package-lock.json
-      - name: Build frontend dist for Tauri bundle
-        run: |
-          npm ci
-          npm run -w apps/oink build
+      - name: Install frontend dependencies
+        run: npm ci
       - name: Test & lint treelink-screen
         run: |
-          cargo test -p treelink-screen --target ${{ matrix.target }}
-          cargo clippy -p treelink-screen --all-targets --target ${{ matrix.target }} -- -D warnings
-      - name: Build TREE LINK backend & desktop UI binaries
-        run: |
-          cargo build --release --target ${{ matrix.target }} -p treelink-screen --bin treelink-screen-host
-          cargo build --release --target ${{ matrix.target }} -p oink-agent --bin oink-backend
-          cargo build --release --target ${{ matrix.target }} -p oink-ui --bin oink
-      - name: Stage release binaries
-        shell: bash
-        run: |
-          mkdir -p dist-stage
-          ext=""
-          if [[ "${{ runner.os }}" == "Windows" ]]; then ext=".exe"; fi
-          cp "target/${{ matrix.target }}/release/treelink-screen-host${ext}" dist-stage/
-          cp "target/${{ matrix.target }}/release/oink-backend${ext}" dist-stage/
-          cp "target/${{ matrix.target }}/release/oink${ext}" "dist-stage/tree-link${ext}"
+          cargo test -p treelink-screen --target aarch64-apple-darwin
+          cargo clippy -p treelink-screen --all-targets --target aarch64-apple-darwin -- -D warnings
+      - name: Build TREE LINK macOS .dmg installer
+        run: python3 scripts/package-macos.py --arch arm64 --output-dir dist-packages --build-label "${{ github.run_number }}"
       - uses: actions/upload-artifact@v4
         with:
-          name: tree-link-${{ matrix.platform }}
-          path: dist-stage/*
+          name: TREE-LINK-macos-arm64-dmg
+          path: |
+            dist-packages/TREE-LINK-*-macos-arm64.dmg
+            dist-packages/SHA256SUMS-macos-arm64.txt
           if-no-files-found: error
+
+  package-windows:
+    needs: frontend
+    runs-on: windows-2022
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: '1.99.0'
+          components: rustfmt, clippy
+          targets: x86_64-pc-windows-msvc
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: treelink-windows-x64
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24.14.1'
+          cache: npm
+          cache-dependency-path: package-lock.json
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install frontend dependencies
+        run: npm ci
+      - name: Test & lint treelink-screen
+        run: |
+          cargo test -p treelink-screen --target x86_64-pc-windows-msvc
+          cargo clippy -p treelink-screen --all-targets --target x86_64-pc-windows-msvc -- -D warnings
+      - name: Build TREE LINK Windows x64 .msi installer
+        run: python scripts/package-windows.py --output-dir dist-packages --sequence "${{ github.run_number }}"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: TREE-LINK-windows-x64-msi
+          path: |
+            dist-packages/TREE-LINK-*-windows-x64.msi
+            dist-packages/SHA256SUMS-windows-x64.txt
+          if-no-files-found: error
+
+  release:
+    needs: [package-macos, package-windows]
+    if: startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && inputs.publish_release)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: release-assets
+          merge-multiple: true
+      - name: Combine SHA256SUMS and publish GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ startsWith(github.ref, 'refs/tags/v') && github.ref_name || inputs.release_tag }}
+        run: |
+          cat release-assets/SHA256SUMS-*.txt > release-assets/SHA256SUMS.txt
+          rm -f release-assets/SHA256SUMS-*.txt
+          ls -la release-assets
+          gh release create "$TAG" release-assets/* \
+            --title "TREE LINK $TAG" \
+            --notes "## TREE LINK 安装包 (macOS Apple Silicon + Windows x64)
+
+          - **macOS (Apple Silicon)**: 下载 \`TREE-LINK-0.3.7-macos-arm64.dmg\`，双击并将 \`TREE LINK.app\` 拖入 \`Applications\`（首次运行请右键 → 打开，或在终端执行 \`xattr -dr com.apple.quarantine \"/Applications/TREE LINK.app\"\`）。
+          - **Windows 10/11 (64位)**: 下载 \`TREE-LINK-0.3.7-windows-x64.msi\`，双击安装（若 SmartScreen 提示未知发布者，点「更多信息 → 仍要运行」）。
+
+          ### 核心特性
+          - 单台 Windows 显示器同时实时 60fps 操控两台 Mac（支持硬件 H.264/HEVC 与 GPU JPEG）
+          - 零延迟本地光标模式 + 250Hz 二进制鼠键操控 + 零排队画面覆盖
+          - 完整保留 Oink 跨机键鼠 KVM、拖拽传文件、剪贴板同步与低延迟音频（GPL-3.0 衍生项目，保留完整许可与归属声明）" \
+            --latest || gh release upload "$TAG" release-assets/* --clobber
