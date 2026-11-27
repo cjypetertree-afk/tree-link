@@ -19,12 +19,12 @@ BEGIN
  BEGIN
   BLOCK "040904b0"
   BEGIN
-   VALUE "CompanyName", "Oink contributors\0"
-   VALUE "FileDescription", "Oink Paste as File menu state\0"
+   VALUE "CompanyName", "TREE LINK (derived from Oink)\0"
+   VALUE "FileDescription", "TREE LINK Paste as File menu\0"
    VALUE "FileVersion", OINK_DISPLAY_VERSION "\0"
    VALUE "InternalName", "OinkPasteMenu\0"
    VALUE "OriginalFilename", "OinkPasteMenu.dll\0"
-   VALUE "ProductName", "Oink\0"
+   VALUE "ProductName", "TREE LINK\0"
    VALUE "ProductVersion", OINK_DISPLAY_VERSION "\0"
   END
  END

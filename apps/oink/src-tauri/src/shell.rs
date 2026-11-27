@@ -480,9 +480,9 @@ fn show_normal(app: &AppHandle, window: &tauri::WebviewWindow) -> tauri::Result<
 #[cfg(not(target_os = "macos"))]
 fn show_normal(_app: &AppHandle, window: &tauri::WebviewWindow) -> tauri::Result<()> {
     // Startup, retained ShowWindow and LaunchServices Reopen can request the
-    // same view. Restore only when needed; an already focused window needs no
-    // further activation (and no second initial reveal).
-    if window.is_visible()? && window.is_focused()? {
+    // same view. Restore only when needed; an already focused non-minimized
+    // window needs no further activation (and no second initial reveal).
+    if window.is_visible()? && !window.is_minimized()? && window.is_focused()? {
         return Ok(());
     }
     #[cfg(windows)]
@@ -525,15 +525,19 @@ fn show_normal(_app: &AppHandle, window: &tauri::WebviewWindow) -> tauri::Result
 
 #[cfg(windows)]
 fn show_windows(window: &tauri::WebviewWindow, activation: Activation) -> tauri::Result<()> {
-    use windows::Win32::UI::WindowsAndMessaging::{SW_SHOWNOACTIVATE, ShowWindow};
+    use windows::Win32::UI::WindowsAndMessaging::{IsIconic, SW_RESTORE, SW_SHOWNOACTIVATE, ShowWindow};
     let hwnd = windows::Win32::Foundation::HWND(window.hwnd()?.0);
-    // Tao show/unminimize may activate before our policy runs. Reveal/restore
-    // without activation first, then use only SetForegroundWindow for explicit
-    // user actions. Never use Tao's Alt-injection fallback or AttachThreadInput.
-    // Windows 10/11 documented API; interactive verification is still pending.
+    // Tao show/unminimize may activate before our policy runs. Restore if
+    // minimized, otherwise reveal without activation first, then use only
+    // SetForegroundWindow for explicit user actions.
     // SAFETY: the live product HWND belongs to this UI thread.
     unsafe {
-        let _ = ShowWindow(hwnd, SW_SHOWNOACTIVATE);
+        let cmd = if IsIconic(hwnd).as_bool() {
+            SW_RESTORE
+        } else {
+            SW_SHOWNOACTIVATE
+        };
+        let _ = ShowWindow(hwnd, cmd);
     }
     if activation == Activation::User {
         focus_window(window)?;

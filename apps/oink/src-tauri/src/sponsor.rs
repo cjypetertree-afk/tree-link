@@ -1,19 +1,25 @@
 //! One anonymous manifest fetch per UI process. Only resolved data URIs reach the WebView.
+#[cfg(test)]
 use base64::Engine;
+#[cfg(test)]
 use image::ImageDecoder;
+#[cfg(test)]
 use reqwest::Url;
 use serde::{Deserialize, Serialize};
-use std::{
-    collections::{HashMap, HashSet},
-    io::Cursor,
-    time::Duration,
-};
+use std::collections::HashMap;
+#[cfg(test)]
+use std::{collections::HashSet, io::Cursor, time::Duration};
 use tokio::sync::watch;
 
+#[cfg(test)]
 const URL: &str = "https://oink.hachiwii.com/sponsor/list.json";
+#[cfg(test)]
 const MAX_MANIFEST: usize = 64 * 1024;
+#[cfg(test)]
 const MAX_ITEMS: usize = 8;
+#[cfg(test)]
 const MAX_ICON: usize = 256 * 1024;
+#[cfg(test)]
 const MAX_QR: usize = 2 * 1024 * 1024;
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -24,6 +30,7 @@ pub(crate) struct LocalizedText {
     locales: HashMap<String, String>,
 }
 
+#[cfg(test)]
 impl LocalizedText {
     fn valid(&self, max: usize) -> bool {
         valid_text(&self.default, max)
@@ -55,6 +62,7 @@ pub(crate) struct SponsorItem {
     action: Action,
 }
 
+#[cfg(test)]
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Manifest {
@@ -67,19 +75,8 @@ pub(crate) struct SponsorList(watch::Receiver<Option<Option<Vec<SponsorItem>>>>)
 impl SponsorList {
     #[cfg(any(target_os = "macos", windows))]
     pub(crate) fn start() -> Self {
-        // Outer Option distinguishes pending from failure. Recreated windows share
-        // the same startup request and in-memory result; nothing is saved to disk.
-        let (complete, result) = watch::channel(None);
-        tauri::async_runtime::spawn(async move {
-            let items = match client() {
-                Ok(client) => tokio::time::timeout(Duration::from_secs(30), load(&client, URL))
-                    .await
-                    .ok()
-                    .flatten(),
-                Err(_) => None,
-            };
-            complete.send_replace(Some(items));
-        });
+        // TREE LINK is independent of upstream Oink servers; never contact oink.hachiwii.com.
+        let (_complete, result) = watch::channel(Some(None));
         Self(result)
     }
 
@@ -89,10 +86,12 @@ impl SponsorList {
     }
 }
 
+#[cfg(test)]
 fn valid_text(text: &str, max: usize) -> bool {
     !text.trim().is_empty() && text.chars().count() <= max && !text.chars().any(char::is_control)
 }
 
+#[cfg(test)]
 fn parsed_url(value: &str) -> Option<Url> {
     if value.len() > 2048 {
         return None;
@@ -101,16 +100,19 @@ fn parsed_url(value: &str) -> Option<Url> {
     (url.username().is_empty() && url.password().is_none() && url.fragment().is_none()).then_some(url)
 }
 
+#[cfg(test)]
 fn image_url(value: &str, origin: &Url) -> bool {
     // The product origin always comes from the fixed HTTPS manifest URL. Tests
     // use a loopback HTTP origin without weakening the production client policy.
     parsed_url(value).is_some_and(|url| url.origin() == origin.origin())
 }
 
+#[cfg(test)]
 fn link_url(value: &str) -> bool {
     parsed_url(value).is_some_and(|url| url.scheme() == "https" && url.host_str().is_some())
 }
 
+#[cfg(test)]
 fn manifest(bytes: &[u8], origin: &Url) -> Option<Vec<SponsorItem>> {
     if bytes.len() > MAX_MANIFEST {
         return None;
@@ -146,10 +148,12 @@ fn manifest(bytes: &[u8], origin: &Url) -> Option<Vec<SponsorItem>> {
     )
 }
 
+#[cfg(test)]
 fn client() -> Result<reqwest::Client, reqwest::Error> {
     client_builder().build()
 }
 
+#[cfg(test)]
 fn client_builder() -> reqwest::ClientBuilder {
     reqwest::Client::builder()
         .https_only(true)
@@ -161,6 +165,7 @@ fn client_builder() -> reqwest::ClientBuilder {
         .referer(false)
 }
 
+#[cfg(test)]
 async fn download(client: &reqwest::Client, url: &str, max: usize, accepted: &[&str]) -> Option<(String, Vec<u8>)> {
     let mut response = client.get(url).send().await.ok()?;
     if !response.status().is_success() || response.content_length().is_some_and(|size| size > max as u64) {
@@ -181,6 +186,7 @@ async fn download(client: &reqwest::Client, url: &str, max: usize, accepted: &[&
     (!bytes.is_empty()).then_some((mime, bytes))
 }
 
+#[cfg(test)]
 async fn image(client: &reqwest::Client, url: &str, icon: bool) -> Option<String> {
     let (mime, bytes) = download(
         client,
@@ -215,6 +221,7 @@ async fn image(client: &reqwest::Client, url: &str, icon: bool) -> Option<String
     ))
 }
 
+#[cfg(test)]
 async fn load(client: &reqwest::Client, url: &str) -> Option<Vec<SponsorItem>> {
     let origin = Url::parse(url).ok()?;
     let (_, bytes) = download(client, url, MAX_MANIFEST, &["application/json"]).await?;

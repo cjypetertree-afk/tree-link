@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Button } from 'oink-ui';
-import { domCodeToHid, HID_LEFT_GUI, HID_SPACE, HID_TAB, type ModifierPreset } from './hidKeymap';
+import { domCodeToHid, HID_LEFT_ALT, HID_LEFT_GUI, HID_SPACE, HID_TAB, type ModifierPreset } from './hidKeymap';
 import {
   buildWebSocketUrl,
   encodeBinaryPointerButton,
@@ -59,11 +59,13 @@ export function RemotePane({
   onClose,
 }: RemotePaneProps) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const backupCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const stageRef = useRef<HTMLDivElement | null>(null);
   const wsRef = useRef<WebSocket | null>(null);
   const decoderRef = useRef<VideoDecoder | null>(null);
   const decoderCodecRef = useRef<string>('');
   const awaitingKeyframeRef = useRef<boolean>(true);
+  const hiddenDocRef = useRef<boolean>(typeof document !== 'undefined' ? document.hidden : false);
   const jpegBusyRef = useRef<boolean>(false);
   const moveTimerRef = useRef<number>(0);
   const lastMoveSentRef = useRef<number>(0);
@@ -76,6 +78,8 @@ export function RemotePane({
   const [axGranted, setAxGranted] = useState<boolean | null>(null);
   const [displays, setDisplays] = useState<DisplayDescriptor[]>([]);
   const [displayId, setDisplayId] = useState<number>(0);
+  const [remoteOs, setRemoteOs] = useState<string>('macos');
+  const [supportedCodecs, setSupportedCodecs] = useState<VideoCodec[]>(['h264', 'hevc', 'jpeg']);
   const [presetId, setPresetId] = useState<string>(QUALITY_PRESETS[0].id);
   const [codec, setCodec] = useState<VideoCodec>(() => (typeof VideoDecoder !== 'undefined' ? 'h264' : 'jpeg'));
   const [showRemoteCursor, setShowRemoteCursor] = useState<boolean>(false);
@@ -113,6 +117,53 @@ export function RemotePane({
     });
   }, [sendJson]);
 
+  const drawFrameToCanvas = useCallback((source: CanvasImageSource, width: number, height: number) => {
+    const canvas = canvasRef.current;
+    if (canvas) {
+      if (canvas.width !== width || canvas.height !== height) {
+        canvas.width = width;
+        canvas.height = height;
+        frameSizeRef.current = { w: width, h: height };
+        setResolution(`${width}×${height}`);
+      }
+      const ctx = canvas.getContext('2d', { alpha: false });
+      if (ctx) {
+        ctx.drawImage(source, 0, 0, width, height);
+      }
+    }
+    // Retain a software backup copy of the latest frame so minimizing/restoring
+    // on Windows WebView2 never flashes or leaves a blank black canvas.
+    let backup = backupCanvasRef.current;
+    if (!backup && typeof document !== 'undefined') {
+      backup = document.createElement('canvas');
+      backupCanvasRef.current = backup;
+    }
+    if (backup) {
+      if (backup.width !== width || backup.height !== height) {
+        backup.width = width;
+        backup.height = height;
+      }
+      const bctx = backup.getContext('2d', { alpha: false });
+      if (bctx) {
+        bctx.drawImage(source, 0, 0, width, height);
+      }
+    }
+  }, []);
+
+  const restoreBackupCanvas = useCallback(() => {
+    const canvas = canvasRef.current;
+    const backup = backupCanvasRef.current;
+    if (!canvas || !backup || backup.width <= 0 || backup.height <= 0) return;
+    if (canvas.width !== backup.width || canvas.height !== backup.height) {
+      canvas.width = backup.width;
+      canvas.height = backup.height;
+    }
+    const ctx = canvas.getContext('2d', { alpha: false });
+    if (ctx) {
+      ctx.drawImage(backup, 0, 0, backup.width, backup.height);
+    }
+  }, []);
+
   const ensureDecoder = useCallback((videoCodec: VideoCodec, width: number, height: number) => {
     if (typeof VideoDecoder === 'undefined') {
       setErrorText('当前浏览器/WebView 不支持 WebCodecs 硬件视频解码');
@@ -130,19 +181,7 @@ export function RemotePane({
     }
     const decoder = new VideoDecoder({
       output: (videoFrame) => {
-        const canvas = canvasRef.current;
-        if (canvas) {
-          if (canvas.width !== videoFrame.displayWidth || canvas.height !== videoFrame.displayHeight) {
-            canvas.width = videoFrame.displayWidth;
-            canvas.height = videoFrame.displayHeight;
-            frameSizeRef.current = { w: videoFrame.displayWidth, h: videoFrame.displayHeight };
-            setResolution(`${videoFrame.displayWidth}×${videoFrame.displayHeight}`);
-          }
-          const ctx = canvas.getContext('2d', { alpha: false });
-          if (ctx) {
-            ctx.drawImage(videoFrame, 0, 0, canvas.width, canvas.height);
-          }
-        }
+        drawFrameToCanvas(videoFrame, videoFrame.displayWidth, videoFrame.displayHeight);
         videoFrame.close();
         const counter = fpsCounterRef.current;
         counter.frames += 1;
@@ -167,7 +206,7 @@ export function RemotePane({
     decoderRef.current = decoder;
     decoderCodecRef.current = key;
     return decoder;
-  }, [sendJson]);
+  }, [drawFrameToCanvas, sendJson]);
 
   useEffect(() => {
     setStatus('connecting');
@@ -189,6 +228,16 @@ export function RemotePane({
         try {
           const msg = JSON.parse(event.data) as Record<string, unknown>;
           if (msg.type === 'hello') {
+            const os = typeof msg.os === 'string' ? msg.os : 'macos';
+            setRemoteOs(os);
+            const rawCodecs = Array.isArray(msg.codecs)
+              ? (msg.codecs as unknown[]).filter((c): c is VideoCodec => c === 'h264' || c === 'hevc' || c === 'jpeg')
+              : [];
+            const avail: VideoCodec[] = rawCodecs.length > 0 ? rawCodecs : ['h264', 'hevc', 'jpeg'];
+            setSupportedCodecs(avail);
+            const effectiveCodec = avail.includes(codec) ? codec : avail[0];
+            if (effectiveCodec !== codec) setCodec(effectiveCodec);
+
             const list = (msg.displays as DisplayDescriptor[] | undefined) ?? [];
             setDisplays(list);
             const primary = list.find(d => d.isPrimary)?.displayId ?? list[0]?.displayId ?? 0;
@@ -196,18 +245,18 @@ export function RemotePane({
             const perms = msg.permissions as { screenRecording?: boolean; accessibility?: boolean } | undefined;
             if (msg.host_capture_supported === false) {
               setStatus('error');
-              setErrorText('对端系统当前仅作为控屏接收端，暂不支持画面采集');
+              setErrorText('对端系统当前版本暂不支持画面采集，请先将对端 TREE LINK 更新到最新版本');
               return;
             }
             if (perms && perms.screenRecording === false) {
               setStatus('error');
-              setErrorText('对端 Mac 尚未授予「屏幕录制」权限，请先在 Mac 的 TREE LINK 中授权');
+              setErrorText('对端尚未授予「屏幕录制」权限，请先在对端的 TREE LINK 中授权');
               return;
             }
             if (perms && typeof perms.accessibility === 'boolean') {
               setAxGranted(perms.accessibility);
             }
-            subscribeStream(primary, presetId, codec, showRemoteCursor);
+            subscribeStream(primary, presetId, effectiveCodec, showRemoteCursor);
           } else if (msg.type === 'permissions') {
             const perms = msg.permissions as { accessibility?: boolean } | undefined;
             if (perms && typeof perms.accessibility === 'boolean') {
@@ -232,6 +281,12 @@ export function RemotePane({
       }
 
       if (event.data instanceof ArrayBuffer) {
+        if (hiddenDocRef.current) {
+          // While minimized/hidden on Windows WebView2, skip decoding delta frames
+          // so the GPU decoder never stalls; request a fresh keyframe on restore.
+          awaitingKeyframeRef.current = true;
+          return;
+        }
         const frame = parseVideoFrame(event.data);
         if (!frame) return;
         if (frame.codec === 'jpeg') {
@@ -241,17 +296,7 @@ export function RemotePane({
           bytes.set(frame.payload);
           const blob = new Blob([bytes], { type: 'image/jpeg' });
           void createImageBitmap(blob).then((bmp) => {
-            const canvas = canvasRef.current;
-            if (canvas) {
-              if (canvas.width !== bmp.width || canvas.height !== bmp.height) {
-                canvas.width = bmp.width;
-                canvas.height = bmp.height;
-                frameSizeRef.current = { w: bmp.width, h: bmp.height };
-                setResolution(`${bmp.width}×${bmp.height}`);
-              }
-              const ctx = canvas.getContext('2d', { alpha: false });
-              if (ctx) ctx.drawImage(bmp, 0, 0, canvas.width, canvas.height);
-            }
+            drawFrameToCanvas(bmp, bmp.width, bmp.height);
             bmp.close();
             const counter = fpsCounterRef.current;
             counter.frames += 1;
@@ -321,7 +366,68 @@ export function RemotePane({
         decoderRef.current = null;
       }
     };
-  }, [target.ip, target.port, target.token, reconnectSeq, ensureDecoder, sendJson, subscribeStream]);
+  }, [target.ip, target.port, target.token, reconnectSeq, drawFrameToCanvas, ensureDecoder, sendJson, subscribeStream]);
+
+  // Preserve the visible image and instantly resume streaming when restoring from
+  // Windows minimize / hidden WebView2 suspension.
+  useEffect(() => {
+    let retryTimer = 0;
+    const handleResume = () => {
+      hiddenDocRef.current = document.hidden;
+      if (document.hidden) {
+        awaitingKeyframeRef.current = true;
+        return;
+      }
+      restoreBackupCanvas();
+      const ws = wsRef.current;
+      if (!ws || ws.readyState === WebSocket.CLOSED || ws.readyState === WebSocket.CLOSING) {
+        setReconnectSeq(s => s + 1);
+        return;
+      }
+      if (decoderRef.current && decoderRef.current.state !== 'configured') {
+        try { decoderRef.current.close(); } catch { /* ignore */ }
+        decoderRef.current = null;
+      }
+      awaitingKeyframeRef.current = true;
+      if (ws.readyState === WebSocket.OPEN) {
+        sendJson({ type: 'request_keyframe' });
+        window.clearTimeout(retryTimer);
+        retryTimer = window.setTimeout(() => {
+          if (!document.hidden && awaitingKeyframeRef.current) {
+            restoreBackupCanvas();
+            sendJson({ type: 'request_keyframe' });
+          }
+        }, 300);
+      }
+    };
+    const handleFocus = () => {
+      if (!document.hidden) {
+        restoreBackupCanvas();
+        if (awaitingKeyframeRef.current && wsRef.current?.readyState === WebSocket.OPEN) {
+          sendJson({ type: 'request_keyframe' });
+        }
+      }
+    };
+    document.addEventListener('visibilitychange', handleResume);
+    window.addEventListener('focus', handleFocus);
+    window.addEventListener('pageshow', handleResume);
+    return () => {
+      window.clearTimeout(retryTimer);
+      document.removeEventListener('visibilitychange', handleResume);
+      window.removeEventListener('focus', handleFocus);
+      window.removeEventListener('pageshow', handleResume);
+    };
+  }, [restoreBackupCanvas, sendJson]);
+
+  // Repaint the preserved frame immediately when switching back from solo hidden mode.
+  useEffect(() => {
+    if (!hidden) {
+      restoreBackupCanvas();
+      if (wsRef.current?.readyState === WebSocket.OPEN) {
+        sendJson({ type: 'request_keyframe' });
+      }
+    }
+  }, [hidden, restoreBackupCanvas, sendJson]);
 
   const normalizedCoords = (clientX: number, clientY: number): { nx: number; ny: number } | null => {
     const canvas = canvasRef.current;
@@ -469,36 +575,51 @@ export function RemotePane({
               subscribeStream(displayId, presetId, next, showRemoteCursor);
             }}
           >
-            <option value="h264">H.264</option>
-            <option value="hevc">HEVC</option>
-            <option value="jpeg">GPU JPEG</option>
+            {supportedCodecs.includes('h264') && <option value="h264">H.264</option>}
+            {supportedCodecs.includes('hevc') && <option value="hevc">HEVC</option>}
+            {supportedCodecs.includes('jpeg') && <option value="jpeg">GPU JPEG</option>}
           </select>
           <Button
             size="sm"
             variant="ghost"
-            title="隐藏视频流里的 Mac 光标，只保留 0ms 延迟的本地鼠标指针"
+            title="隐藏视频流里的远端光标，只保留 0ms 延迟的本地鼠标指针"
             onClick={() => {
               const next = !showRemoteCursor;
               setShowRemoteCursor(next);
               subscribeStream(displayId, presetId, codec, next);
             }}
           >
-            {showRemoteCursor ? '显示Mac光标' : '零延迟光标'}
+            {showRemoteCursor ? (remoteOs === 'windows' ? '显示Win光标' : '显示Mac光标') : '零延迟光标'}
           </Button>
           <Button
             size="sm"
             variant="ghost"
-            title="切换 Windows 键盘映射：Ctrl↔⌘ 或 Win→⌘"
+            title={remoteOs === 'windows' ? '切换 Mac→Win 快捷键映射：⌘↔Ctrl 或原样按键' : '切换键盘映射：Ctrl↔⌘ 或 Win→⌘'}
             onClick={() => setModPreset(p => (p === 'ctrl_as_cmd' ? 'standard' : 'ctrl_as_cmd'))}
           >
-            {modPreset === 'ctrl_as_cmd' ? 'Ctrl→⌘' : 'Win→⌘'}
+            {remoteOs === 'windows'
+              ? (modPreset === 'ctrl_as_cmd' ? '⌘→Ctrl' : '原样按键')
+              : (modPreset === 'ctrl_as_cmd' ? 'Ctrl→⌘' : 'Win→⌘')}
           </Button>
-          <Button size="sm" variant="ghost" title="向该 Mac 发送 ⌘Space (聚焦搜索)" onClick={() => sendChord([HID_LEFT_GUI, HID_SPACE])}>
-            ⌘Space
-          </Button>
-          <Button size="sm" variant="ghost" title="向该 Mac 发送 ⌘Tab (切换应用)" onClick={() => sendChord([HID_LEFT_GUI, HID_TAB])}>
-            ⌘Tab
-          </Button>
+          {remoteOs === 'windows' ? (
+            <>
+              <Button size="sm" variant="ghost" title="向该 Windows 发送 Win 键（打开开始菜单）" onClick={() => sendChord([HID_LEFT_GUI])}>
+                Win 键
+              </Button>
+              <Button size="sm" variant="ghost" title="向该 Windows 发送 Alt+Tab（切换窗口）" onClick={() => sendChord([HID_LEFT_ALT, HID_TAB])}>
+                Alt+Tab
+              </Button>
+            </>
+          ) : (
+            <>
+              <Button size="sm" variant="ghost" title="向该 Mac 发送 ⌘Space (聚焦搜索)" onClick={() => sendChord([HID_LEFT_GUI, HID_SPACE])}>
+                ⌘Space
+              </Button>
+              <Button size="sm" variant="ghost" title="向该 Mac 发送 ⌘Tab (切换应用)" onClick={() => sendChord([HID_LEFT_GUI, HID_TAB])}>
+                ⌘Tab
+              </Button>
+            </>
+          )}
           {onToggleAudioMute && (
             <Button size="sm" variant="ghost" title="静音 / 取消静音此设备音频" onClick={onToggleAudioMute}>
               {speakerMuted ? '音频已静音' : '音频开启'}

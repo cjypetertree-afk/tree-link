@@ -12,7 +12,7 @@ use crate::{LaunchAtLoginProblem, LaunchAtLoginState, LaunchAtLoginStatus};
 /// 当前进程是不是从一个 `.app` 运行。`SMAppService.mainApp` 指的是「主程序包」，裸可执行文件
 /// （`cargo run`、`tauri build --no-bundle`、命令行工具）没有可登记的东西。
 fn bundle_problem_for(path: &str, identifier: Option<&str>) -> Option<LaunchAtLoginProblem> {
-    if !path.ends_with(".app") || identifier != Some("com.hachiwii.oink") {
+    if !path.ends_with(".app") || !matches!(identifier, Some("com.treelink.app" | "com.hachiwii.oink")) {
         return Some(LaunchAtLoginProblem::MainAppRequired);
     }
     if path.contains("/AppTranslocation/") {

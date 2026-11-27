@@ -1,5 +1,6 @@
 fn main() {
     println!("cargo:rerun-if-changed=native/macos_capture.m");
+    println!("cargo:rerun-if-changed=native/windows_capture.cpp");
     #[cfg(target_os = "macos")]
     if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("macos") {
         let mut native = cc::Build::new();
@@ -37,5 +38,21 @@ fn main() {
         println!("cargo:rustc-link-lib=framework=AppKit");
         println!("cargo:rustc-link-lib=framework=ApplicationServices");
         println!("cargo:rustc-link-lib=framework=IOKit");
+    }
+
+    #[cfg(windows)]
+    if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("windows") {
+        let mut native = cc::Build::new();
+        native
+            .cpp(true)
+            .static_crt(true)
+            .file("native/windows_capture.cpp")
+            .flag("/std:c++17")
+            .flag("/EHsc")
+            .warnings(true)
+            .compile("treelink_windows_capture");
+        for lib in ["gdi32", "user32", "ole32", "oleaut32", "windowscodecs", "uuid"] {
+            println!("cargo:rustc-link-lib={lib}");
+        }
     }
 }

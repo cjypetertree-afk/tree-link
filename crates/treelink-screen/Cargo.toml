@@ -32,7 +32,7 @@ constant_time_eq = "0.4"
 objc2-core-foundation = "0.3"
 objc2-core-graphics = "0.3"
 
-[target.'cfg(target_os = "macos")'.build-dependencies]
+[target.'cfg(any(target_os = "macos", windows))'.build-dependencies]
 cc = "1"
 
 [dev-dependencies]

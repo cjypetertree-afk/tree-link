@@ -320,6 +320,17 @@ async fn open_diagnostics_folder(window: tauri::WebviewWindow, state: State<'_, 
 }
 
 pub fn run() {
+    #[cfg(windows)]
+    {
+        // Match the MSI Start Menu / Desktop shortcut AppUserModelID so Windows Taskbar
+        // displays the new TREE LINK Q-style chibi tree icon without inheriting cached Oink icons.
+        // SAFETY: static wide string literal called once at process startup before window creation.
+        let _ = unsafe {
+            windows::Win32::UI::Shell::SetCurrentProcessExplicitAppUserModelID(windows::core::w!(
+                "com.treelink.app.ui"
+            ))
+        };
+    }
     oink_agent::logs::init_ui();
     tracing::info!(pid = std::process::id(), "UI process starting");
     let ui_lock;

@@ -6,11 +6,11 @@
            Version="$(var.ProductVersion)" ProductCode="$(var.ProductCode)"
            UpgradeCode="$(var.UpgradeCode)" Scope="perMachine" InstallerVersion="500">
     <Binary Id="OinkLocalUpdateNotes" SourceFile="$(var.UpdateNotesFile)" />
-    <Icon Id="OinkIcon.ico" SourceFile="$(var.AppIcon)" />
+    <Icon Id="TreeLinkIcon.ico" SourceFile="$(var.AppIcon)" />
     <Property Id="OINK_VERSION" Value="$(var.DisplayVersion)" />
     <Property Id="OINK_SOURCE_TREE" Value="$(var.SourceTreeSha256)" />
     <Property Id="OINK_MINIMUM_WINDOWS_BUILD" Value="$(var.MinimumWindowsBuild)" />
-    <Property Id="ARPPRODUCTICON" Value="OinkIcon.ico" />
+    <Property Id="ARPPRODUCTICON" Value="TreeLinkIcon.ico" />
     <Property Id="OinkLaunch" Value="1" />
     <SetProperty Id="OinkLaunch" Action="NoUpgradeLaunch" Value="0" After="FindRelatedProducts" Sequence="ui"
                  Condition="WIX_UPGRADE_DETECTED" />
@@ -83,8 +83,8 @@
         <Component Id="UserEntry" Guid="*">
           <File Id="UiExe" Source="$(var.Payload)/$(var.UiExe)" KeyPath="yes">
             <Shortcut Id="StartMenuEntry" Directory="ProgramMenuFolder" Name="$(var.ProductName)"
-                      Advertise="no" Icon="OinkIcon.ico" IconIndex="0" WorkingDirectory="INSTALLFOLDER">
-              <ShortcutProperty Key="System.AppUserModel.ID" Value="com.hachiwii.oink.ui" />
+                      Advertise="no" Icon="TreeLinkIcon.ico" IconIndex="0" WorkingDirectory="INSTALLFOLDER">
+              <ShortcutProperty Key="System.AppUserModel.ID" Value="com.treelink.app.ui" />
             </Shortcut>
           </File>
           <fw:FirewallException Id="BackendUdpInbound" File="UiExe"
@@ -142,8 +142,8 @@
     <StandardDirectory Id="DesktopFolder">
       <Component Id="DesktopEntry" Guid="*" Transitive="yes" Condition="OINK_DESKTOP_SHORTCUT = &quot;1&quot;">
         <Shortcut Id="DesktopShortcut" Name="$(var.ProductName)" Target="[#UiExe]"
-                  WorkingDirectory="INSTALLFOLDER" Icon="OinkIcon.ico" IconIndex="0">
-          <ShortcutProperty Key="System.AppUserModel.ID" Value="com.hachiwii.oink.ui" />
+                  WorkingDirectory="INSTALLFOLDER" Icon="TreeLinkIcon.ico" IconIndex="0">
+          <ShortcutProperty Key="System.AppUserModel.ID" Value="com.treelink.app.ui" />
         </Shortcut>
         <RegistryValue Root="HKLM" Key="$(var.RegistryKey)" Name="DesktopShortcutComponent"
                        Value="1" Type="integer" KeyPath="yes" />

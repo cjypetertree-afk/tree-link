@@ -281,7 +281,7 @@ export function SettingsPage({ open, platform, api, capsIme, query, jump, onActi
         switch (item.id) {
             case 'crashReports': {
                 const description = text(item.desc, platform);
-                const privacy = 'https://github.com/oinkvm/oink/blob/main/PRIVACY.md';
+                const privacy = 'https://github.com/cjypetertree-afk/tree-link/blob/main/PRIVACY.md';
                 return {
                     desc: <>{description}{' '}<a href={privacy} onClick={event => {
                         event.preventDefault();

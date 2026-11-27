@@ -14,12 +14,40 @@ interface RemoteWorkbenchProps {
 
 type LayoutMode = 'single' | 'split-h' | 'split-v';
 
+const STORAGE_KEY = 'treelink.remoteWorkbench.v1';
+
+interface SavedWorkbenchState {
+  activeTargets: RemoteTarget[];
+  layout: LayoutMode;
+  soloTargetId: string | null;
+}
+
+function loadSavedWorkbench(): SavedWorkbenchState {
+  const empty: SavedWorkbenchState = { activeTargets: [], layout: 'split-h', soloTargetId: null };
+  if (import.meta.env.MODE === 'test' || typeof window === 'undefined') return empty;
+  try {
+    const raw = window.localStorage.getItem(STORAGE_KEY);
+    if (!raw) return empty;
+    const parsed = JSON.parse(raw) as Partial<SavedWorkbenchState>;
+    const layout: LayoutMode = parsed.layout === 'single' || parsed.layout === 'split-v' ? parsed.layout : 'split-h';
+    const activeTargets = Array.isArray(parsed.activeTargets)
+      ? parsed.activeTargets.filter((t): t is RemoteTarget =>
+          Boolean(t && typeof t.id === 'string' && typeof t.ip === 'string' && typeof t.port === 'number'))
+      : [];
+    const soloTargetId = typeof parsed.soloTargetId === 'string' ? parsed.soloTargetId : null;
+    return { activeTargets, layout, soloTargetId };
+  } catch {
+    return empty;
+  }
+}
+
 export function RemoteWorkbench({ devices, pickRequest, onToggleSpeakerMute }: RemoteWorkbenchProps) {
+  const [initialSaved] = useState<SavedWorkbenchState>(() => loadSavedWorkbench());
   const [status, setStatus] = useState<RemoteDesktopStatus | null>(null);
   const [loading, setLoading] = useState<boolean>(true);
-  const [activeTargets, setActiveTargets] = useState<RemoteTarget[]>([]);
-  const [layout, setLayout] = useState<LayoutMode>('split-h');
-  const [soloTargetId, setSoloTargetId] = useState<string | null>(null);
+  const [activeTargets, setActiveTargets] = useState<RemoteTarget[]>(() => initialSaved.activeTargets);
+  const [layout, setLayout] = useState<LayoutMode>(() => initialSaved.layout);
+  const [soloTargetId, setSoloTargetId] = useState<string | null>(() => initialSaved.soloTargetId);
   const [showManualForm, setShowManualForm] = useState<boolean>(false);
   const [manualIp, setManualIp] = useState<string>('');
   const [manualPort, setManualPort] = useState<string>('47474');
@@ -101,6 +129,41 @@ export function RemoteWorkbench({ devices, pickRequest, onToggleSpeakerMute }: R
     setActiveTargets(prev => (prev.some(t => t.id === target.id) ? prev : [...prev, target]));
     setSoloTargetId(target.id);
   }, [pickRequest, status, makePeerTarget]);
+
+  // Persist open panes & layout so closing to tray / restoring on Windows keeps all connected screens.
+  useEffect(() => {
+    if (import.meta.env.MODE === 'test' || typeof window === 'undefined') return;
+    try {
+      const payload: SavedWorkbenchState = { activeTargets, layout, soloTargetId };
+      window.localStorage.setItem(STORAGE_KEY, JSON.stringify(payload));
+    } catch {
+      // ignore quota/private storage errors
+    }
+  }, [activeTargets, layout, soloTargetId]);
+
+  // Refresh saved peer targets' IP/port/token when backend status updates.
+  useEffect(() => {
+    if (!status) return;
+    setActiveTargets(prev => {
+      let changed = false;
+      const next = prev.map(t => {
+        if (!t.deviceId) return t;
+        const peer = status.peers.find(p => p.device === t.deviceId);
+        if (!peer) return t;
+        const best = pickBestInterface(peer.rankedIps);
+        const nextIp = best?.ip ?? t.ip;
+        const nextPort = peer.defaultPort;
+        const nextToken = status.authToken ?? t.token;
+        const nextLink = best?.linkClass ?? t.linkClass;
+        if (nextIp === t.ip && nextPort === t.port && nextToken === t.token && nextLink === t.linkClass && peer.name === t.name) {
+          return t;
+        }
+        changed = true;
+        return { ...t, name: peer.name, ip: nextIp, port: nextPort, token: nextToken, linkClass: nextLink };
+      });
+      return changed ? next : prev;
+    });
+  }, [status]);
 
   // Ensure soloTargetId always points to an open pane when in single mode.
   useEffect(() => {

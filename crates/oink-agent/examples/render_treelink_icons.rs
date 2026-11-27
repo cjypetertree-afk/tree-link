@@ -123,13 +123,26 @@ fn main() {
     }
     println!("ICONSET_DIR={}", iconset.display());
 
-    // 3. Multi-size Windows icon.ico (PNG-encoded entries).
+    // 3. Multi-size Windows icon.ico & Explorer PasteMenu icons (PNG-encoded entries).
     let mut ico_entries = Vec::new();
     for sz in [16u32, 24, 32, 48, 64, 128, 256] {
         let pm = render_svg(&win_svg, sz, sz);
         ico_entries.push((sz, pm.encode_png().unwrap()));
     }
     write_ico(&icons_dir.join("icon.ico"), &ico_entries);
+
+    let win_light_svg = win_svg
+        .replace("#152C22", "#ECFCF2")
+        .replace("#0D1C16", "#D2F7E2");
+    let mut paste_light = Vec::new();
+    let mut paste_dark = Vec::new();
+    for sz in [16u32, 20, 24, 32, 40, 48, 64] {
+        paste_light.push((sz, render_svg(&win_light_svg, sz, sz).encode_png().unwrap()));
+        paste_dark.push((sz, render_svg(&win_svg, sz, sz).encode_png().unwrap()));
+    }
+    let win_pkg = root.join("packaging/windows");
+    write_ico(&win_pkg.join("OinkPasteMenu.ico"), &paste_light);
+    write_ico(&win_pkg.join("OinkPasteMenuDark.ico"), &paste_dark);
 
     // 4. All 36 macOS menu-bar tray PNGs from tray/artwork.rs.
     let tray_dir = root.join("crates/oink-agent/src/tray/images");

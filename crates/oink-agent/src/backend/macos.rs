@@ -81,12 +81,14 @@ pub(super) fn request_window() {
     // helper asks to activate, including when it is already running. A plain
     // IPC ShowWindow does not transfer that permission. The bundle-id form also
     // covers a helper that has not been started yet (public AppKit contract).
-    let identifier = NSString::from_str("com.hachiwii.oink.ui");
-    let running = objc2_app_kit::NSRunningApplication::runningApplicationsWithBundleIdentifier(&identifier);
-    if let Some(helper) = running.firstObject() {
-        app.yieldActivationToApplication(&helper);
-    } else {
-        app.yieldActivationToApplicationWithBundleIdentifier(&identifier);
+    for bundle_id in ["com.hachiwii.oink.ui", "com.treelink.app.ui"] {
+        let identifier = NSString::from_str(bundle_id);
+        let running = objc2_app_kit::NSRunningApplication::runningApplicationsWithBundleIdentifier(&identifier);
+        if let Some(helper) = running.firstObject() {
+            app.yieldActivationToApplication(&helper);
+        } else {
+            app.yieldActivationToApplicationWithBundleIdentifier(&identifier);
+        }
     }
     if let Err(error) = super::show_ui() {
         // A reopen event can arrive while the startup worker is still preparing

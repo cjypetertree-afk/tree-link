@@ -223,9 +223,9 @@ describe('applicable independent permission rows', () => {
       rerender(view());
       const row = container.querySelector('[data-item="crashReports"]')!;
       const link = within(row as HTMLElement).getByRole('link', { name: language === 'en' ? 'Privacy policy' : '隐私政策' });
-      expect(link.getAttribute('href')).toBe('https://github.com/oinkvm/oink/blob/main/PRIVACY.md');
+      expect(link.getAttribute('href')).toBe('https://github.com/cjypetertree-afk/tree-link/blob/main/PRIVACY.md');
       fireEvent.click(link);
-      await waitFor(() => expect(open).toHaveBeenCalledWith('https://github.com/oinkvm/oink/blob/main/PRIVACY.md'));
+      await waitFor(() => expect(open).toHaveBeenCalledWith('https://github.com/cjypetertree-afk/tree-link/blob/main/PRIVACY.md'));
       expect(set).not.toHaveBeenCalled();
       canEdit.mockRestore();
     }
@@ -304,7 +304,7 @@ describe('settings actions', () => {
     const open = vi.spyOn(shell, 'openUrl').mockResolvedValue();
     const { container } = render(view());
     fireEvent.click(container.querySelector('[data-item="version"] button')!);
-    await waitFor(() => expect(open).toHaveBeenCalledWith('https://github.com/oinkvm/oink/releases'));
+    await waitFor(() => expect(open).toHaveBeenCalledWith('https://github.com/cjypetertree-afk/tree-link/releases'));
     const input = container.querySelector('[data-item="logMaxMb"] input')!;
     expect(input.closest('.ok-input')?.textContent).toContain('MB');
     open.mockRestore();

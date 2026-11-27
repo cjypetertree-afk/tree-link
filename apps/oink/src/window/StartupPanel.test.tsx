@@ -48,5 +48,5 @@ it('keeps recovery actions on the shell while the backend is unavailable', async
   await vi.waitFor(() => expect(writeText).toHaveBeenCalledWith(expect.stringContaining('os error 2')));
   rerender(<StartupPanel raw="oink_update_in_progress"/>);
   fireEvent.click(screen.getByText('Download installer'));
-  expect(call).toHaveBeenCalledWith('shell_open_url', {url:'https://github.com/oinkvm/oink/releases/latest'});
+  expect(call).toHaveBeenCalledWith('shell_open_url', {url:'https://github.com/cjypetertree-afk/tree-link/releases/latest'});
 });

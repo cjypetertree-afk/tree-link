@@ -240,6 +240,7 @@ fn main() {
     };
 
     let now = OffsetDateTime::now_utc();
+    let min_seq = (now.unix_timestamp().max(1_000_000)) as u64;
     for channel in [Channel::Stable, Channel::Beta] {
         let rel_path = catalog::path(platform, &epoch, &arch, channel);
         let existing_path = output_root.join(&rel_path);
@@ -248,7 +249,7 @@ fn main() {
         let sequence = requested_seq
             .unwrap_or(prev_seq + 1)
             .max(prev_seq + 1)
-            .max(1);
+            .max(min_seq);
 
         let mut releases = existing
             .map(|c| c.releases)

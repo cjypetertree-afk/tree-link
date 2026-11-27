@@ -12,7 +12,9 @@ pub mod ws;
 mod macos;
 #[cfg(target_os = "macos")]
 mod macos_input;
-#[cfg(not(target_os = "macos"))]
+#[cfg(target_os = "windows")]
+mod windows_host;
+#[cfg(not(any(target_os = "macos", target_os = "windows")))]
 mod stub;
 
 #[cfg(target_os = "macos")]
@@ -24,7 +26,15 @@ pub(crate) mod platform {
     pub use crate::macos_input::InputInjector;
 }
 
-#[cfg(not(target_os = "macos"))]
+#[cfg(target_os = "windows")]
+pub(crate) mod platform {
+    pub use crate::windows_host::{
+        CaptureHandle, InputInjector, host_capture_supported, list_displays, permissions,
+        request_accessibility_permission, request_screen_recording_permission,
+    };
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "windows")))]
 pub(crate) mod platform {
     pub use crate::stub::{
         CaptureHandle, InputInjector, host_capture_supported, list_displays, permissions,

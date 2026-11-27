@@ -432,7 +432,9 @@
       hostTabs.querySelectorAll('.host-pill').forEach(n => n.remove());
       for (const item of panes) {
         const isActive = currentLayout === 'single' ? item.id === soloPaneId : true;
+        const wasHidden = item.el.classList.contains('hidden-solo');
         item.el.classList.toggle('hidden-solo', currentLayout === 'single' && item.id !== soloPaneId);
+        if (wasHidden && isActive && item.restoreCanvas) item.restoreCanvas();
         const soloBtn = item.el.querySelector('.p-solo');
         if (soloBtn) {
           soloBtn.style.display = panes.length > 1 ? '' : 'none';
@@ -535,6 +537,33 @@
       const dot = $('.dot');
       const canvas = $('canvas');
       const ctx = canvas.getContext('2d', { alpha: false });
+      const backupCanvas = document.createElement('canvas');
+      const backupCtx = backupCanvas.getContext('2d', { alpha: false });
+      let hiddenDoc = document.hidden;
+      let resumeRetryTimer = 0;
+
+      function drawFrame(src, w, h) {
+        if (canvas.width !== w || canvas.height !== h) {
+          canvas.width = w;
+          canvas.height = h;
+        }
+        ctx.drawImage(src, 0, 0, w, h);
+        if (backupCanvas.width !== w || backupCanvas.height !== h) {
+          backupCanvas.width = w;
+          backupCanvas.height = h;
+        }
+        backupCtx.drawImage(src, 0, 0, w, h);
+      }
+
+      function restoreCanvas() {
+        if (backupCanvas.width <= 0 || backupCanvas.height <= 0) return;
+        if (canvas.width !== backupCanvas.width || canvas.height !== backupCanvas.height) {
+          canvas.width = backupCanvas.width;
+          canvas.height = backupCanvas.height;
+        }
+        ctx.drawImage(backupCanvas, 0, 0, backupCanvas.width, backupCanvas.height);
+      }
+
       const stage = $('.stage');
       const overlay = $('.overlay');
       const oTitle = $('.o-title');
@@ -699,11 +728,7 @@
         if (decoder) { try { decoder.close(); } catch {} decoder = null; }
         decoder = new VideoDecoder({
           output: (vf) => {
-            if (canvas.width !== vf.displayWidth || canvas.height !== vf.displayHeight) {
-              canvas.width = vf.displayWidth;
-              canvas.height = vf.displayHeight;
-            }
-            ctx.drawImage(vf, 0, 0, canvas.width, canvas.height);
+            drawFrame(vf, vf.displayWidth, vf.displayHeight);
             bumpFps(vf.displayWidth, vf.displayHeight);
             vf.close();
           },
@@ -738,6 +763,10 @@
                   httpsUpgradeBtn.onclick = () => {
                     location.href = `https://${location.hostname}:${m.tls_port}/${location.search}`;
                   };
+                }
+                if (Array.isArray(m.codecs) && m.codecs.length > 0 && !m.codecs.includes(currentCodec)) {
+                  currentCodec = m.codecs[0];
+                  selCodec.value = currentCodec;
                 }
                 const list = m.displays || [];
                 if (list.length > 0) {
@@ -774,6 +803,10 @@
           }
 
           if (ev.data instanceof ArrayBuffer) {
+            if (hiddenDoc) {
+              awaitingKey = true;
+              return;
+            }
             const f = parseFrame(ev.data);
             if (!f) return;
             if (f.codec === 'jpeg') {
@@ -781,11 +814,7 @@
               jpegBusy = true;
               const blob = new Blob([f.payload], { type: 'image/jpeg' });
               createImageBitmap(blob).then((bmp) => {
-                if (canvas.width !== bmp.width || canvas.height !== bmp.height) {
-                  canvas.width = bmp.width;
-                  canvas.height = bmp.height;
-                }
-                ctx.drawImage(bmp, 0, 0, canvas.width, canvas.height);
+                drawFrame(bmp, bmp.width, bmp.height);
                 bmp.close();
                 bumpFps(f.width, f.height);
                 setState('streaming');
@@ -823,10 +852,50 @@
         };
       }
 
+      const onVisibilityResume = () => {
+        hiddenDoc = document.hidden;
+        if (document.hidden) {
+          awaitingKey = true;
+          return;
+        }
+        restoreCanvas();
+        if (!ws || ws.readyState === WebSocket.CLOSED || ws.readyState === WebSocket.CLOSING) {
+          connect();
+          return;
+        }
+        if (decoder && decoder.state !== 'configured') {
+          try { decoder.close(); } catch {}
+          decoder = null;
+        }
+        awaitingKey = true;
+        if (ws.readyState === WebSocket.OPEN) {
+          sendJson({ type: 'request_keyframe' });
+          clearTimeout(resumeRetryTimer);
+          resumeRetryTimer = setTimeout(() => {
+            if (!document.hidden && awaitingKey) {
+              restoreCanvas();
+              sendJson({ type: 'request_keyframe' });
+            }
+          }, 300);
+        }
+      };
+      const onWindowFocus = () => {
+        if (!document.hidden) {
+          restoreCanvas();
+          if (awaitingKey && ws && ws.readyState === WebSocket.OPEN) {
+            sendJson({ type: 'request_keyframe' });
+          }
+        }
+      };
+      document.addEventListener('visibilitychange', onVisibilityResume);
+      window.addEventListener('focus', onWindowFocus);
+      window.addEventListener('pageshow', onVisibilityResume);
+
       function disconnect(removeEl) {
         clearInterval(pingTimer);
         clearInterval(permTimer);
         permTimer = null;
+        clearTimeout(resumeRetryTimer);
         if (moveTimer) { clearTimeout(moveTimer); moveTimer = 0; }
         pendingMove = null;
         if (ws) {
@@ -841,6 +910,9 @@
         }
         if (decoder) { try { decoder.close(); } catch {} decoder = null; }
         if (removeEl) {
+          document.removeEventListener('visibilitychange', onVisibilityResume);
+          window.removeEventListener('focus', onWindowFocus);
+          window.removeEventListener('pageshow', onVisibilityResume);
           const idx = panes.findIndex(p => p.id === paneId);
           if (idx >= 0) panes.splice(idx, 1);
           if (soloPaneId === paneId) soloPaneId = panes[0]?.id ?? null;
@@ -1017,7 +1089,7 @@
       };
 
       grid.appendChild(pane);
-      panes.push({ id: paneId, el: pane, getLabel: () => $('.p-name').textContent || host });
+      panes.push({ id: paneId, el: pane, getLabel: () => $('.p-name').textContent || host, restoreCanvas });
       if (!soloPaneId) soloPaneId = paneId;
       syncPaneVisibility();
       connect();

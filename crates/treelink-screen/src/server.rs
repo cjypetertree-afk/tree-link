@@ -465,6 +465,10 @@ async fn handle_connection<S: AsyncRead + AsyncWrite + Unpin + Send + 'static>(
     });
 
     // Send initial Hello with displays, permissions, and ranked interfaces.
+    #[cfg(target_os = "macos")]
+    let supported_codecs = vec![VideoCodec::H264, VideoCodec::Hevc, VideoCodec::Jpeg];
+    #[cfg(not(target_os = "macos"))]
+    let supported_codecs = vec![VideoCodec::Jpeg];
     let hello = ServerMsg::Hello {
         device_name: (*device_name).clone(),
         os: std::env::consts::OS.to_string(),
@@ -472,7 +476,7 @@ async fn handle_connection<S: AsyncRead + AsyncWrite + Unpin + Send + 'static>(
         permissions: crate::platform::permissions(),
         displays: crate::platform::list_displays(),
         interfaces: rank_local_interfaces(),
-        codecs: vec![VideoCodec::H264, VideoCodec::Hevc, VideoCodec::Jpeg],
+        codecs: supported_codecs,
         tls_port,
     };
     if let Ok(text) = serde_json::to_string(&hello) {
@@ -504,11 +508,15 @@ async fn handle_connection<S: AsyncRead + AsyncWrite + Unpin + Send + 'static>(
                                 match start_capture_for_client(&cfg, video_tx.clone(), latest_jpeg.clone()) {
                                     Ok(handle) => {
                                         active_capture = Some(handle);
+                                        #[cfg(target_os = "macos")]
+                                        let active_codec = cfg.codec;
+                                        #[cfg(not(target_os = "macos"))]
+                                        let active_codec = VideoCodec::Jpeg;
                                         send_server_msg(
                                             &ctrl_tx,
                                             &ServerMsg::StreamStarted {
                                                 display_id: cfg.display_id,
-                                                codec: cfg.codec,
+                                                codec: active_codec,
                                                 fps: cfg.fps,
                                                 bitrate_kbps: cfg.bitrate_kbps,
                                             },
@@ -760,6 +768,7 @@ async fn handle_upload_http<S: AsyncRead + AsyncWrite + Unpin>(
     };
 
     let base_dir = std::env::var_os("HOME")
+        .or_else(|| std::env::var_os("USERPROFILE"))
         .map(std::path::PathBuf::from)
         .unwrap_or_else(std::env::temp_dir)
         .join("Downloads")
