@@ -14,7 +14,7 @@ on:
       release_tag:
         description: Release tag name (when publish_release is true)
         type: string
-        default: v0.3.7-treelink.1
+        default: v0.3.7-treelink.3
 
 permissions:
   contents: write
@@ -134,20 +134,33 @@ jobs:
       - name: Combine SHA256SUMS and publish GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
           TAG: ${{ startsWith(github.ref, 'refs/tags/v') && github.ref_name || inputs.release_tag }}
         run: |
           cat release-assets/SHA256SUMS-*.txt > release-assets/SHA256SUMS.txt
           rm -f release-assets/SHA256SUMS-*.txt
           ls -la release-assets
-          gh release create "$TAG" release-assets/* \
-            --title "TREE LINK $TAG" \
-            --notes "## TREE LINK 安装包 (macOS Apple Silicon + Windows x64)
+          if gh release view "$TAG" --repo "$GH_REPO" >/dev/null 2>&1; then
+            gh release upload "$TAG" release-assets/* --repo "$GH_REPO" --clobber
+          else
+            gh release create "$TAG" release-assets/* \
+              --repo "$GH_REPO" \
+              --title "TREE LINK $TAG" \
+              --notes "## TREE LINK 安装包 (Q版小树图标 · 默认实时控屏 · 单机/双机自由切换)
 
-          - **macOS (Apple Silicon)**: 下载 \`TREE-LINK-0.3.7-macos-arm64.dmg\`，双击并将 \`TREE LINK.app\` 拖入 \`Applications\`（首次运行请右键 → 打开，或在终端执行 \`xattr -dr com.apple.quarantine \"/Applications/TREE LINK.app\"\`）。
-          - **Windows 10/11 (64位)**: 下载 \`TREE-LINK-0.3.7-windows-x64.msi\`，双击安装（若 SmartScreen 提示未知发布者，点「更多信息 → 仍要运行」）。
+          - **macOS (Apple Silicon)**: 下载 \`TREE-LINK-0.3.7-macos-arm64.dmg\`，或运行一行自动安装/更新：
+            \`\`\`bash
+            curl -fsSL https://raw.githubusercontent.com/cjypetertree-afk/tree-link/main/scripts/install-mac.sh | bash
+            \`\`\`
+          - **Windows 10/11 (64位)**: 下载 \`TREE-LINK-0.3.7-windows-x64.msi\`，或 PowerShell 运行一行自动安装/更新：
+            \`\`\`powershell
+            irm https://raw.githubusercontent.com/cjypetertree-afk/tree-link/main/scripts/install-windows.ps1 | iex
+            \`\`\`
 
           ### 核心特性
-          - 单台 Windows 显示器同时实时 60fps 操控两台 Mac（支持硬件 H.264/HEVC 与 GPU JPEG）
-          - 零延迟本地光标模式 + 250Hz 二进制鼠键操控 + 零排队画面覆盖
-          - 完整保留 Oink 跨机键鼠 KVM、拖拽传文件、剪贴板同步与低延迟音频（GPL-3.0 衍生项目，保留完整许可与归属声明）" \
-            --latest || gh release upload "$TAG" release-assets/* --clobber
+          - 打开默认进入 **TREE LINK 实时控屏** 主界面，单台专注 / 双台同屏独立自由切换
+          - 全新 Q 版小树图标与全界面 TREE LINK 品牌化（保留完整 GPL-3.0 衍生许可与归属声明）
+          - 零延迟本地光标模式 + 250Hz 二进制鼠键操控 + 60fps 硬件 H.264/HEVC
+          - 完整保留跨机键鼠 KVM、拖拽传文件、剪贴板同步与低延迟音频" \
+              --latest
+          fi
