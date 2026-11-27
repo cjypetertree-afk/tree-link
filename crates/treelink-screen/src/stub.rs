@@ -36,17 +36,20 @@ pub fn list_displays() -> Vec<DisplayDescriptor> {
     displays
         .into_iter()
         .enumerate()
-        .map(|(idx, d)| DisplayDescriptor {
-            display_id: (idx + 1) as u32,
-            name: d.name,
-            origin_x: d.origin.x as i32,
-            origin_y: d.origin.y as i32,
-            logical_width: d.size.w.max(1.0) as u32,
-            logical_height: d.size.h.max(1.0) as u32,
-            pixel_width: (d.size.w * d.pixels_per_unit()).max(1.0) as u32,
-            pixel_height: (d.size.h * d.pixels_per_unit()).max(1.0) as u32,
-            scale_factor: d.pixels_per_unit() as f32,
-            is_primary: d.is_primary,
+        .map(|(idx, d)| {
+            let scale_factor = d.pixels_per_unit() as f32;
+            DisplayDescriptor {
+                display_id: (idx + 1) as u32,
+                name: d.name,
+                origin_x: d.bounds.x as i32,
+                origin_y: d.bounds.y as i32,
+                logical_width: d.bounds.w.max(1.0) as u32,
+                logical_height: d.bounds.h.max(1.0) as u32,
+                pixel_width: d.pixel_width.max(1),
+                pixel_height: d.pixel_height.max(1),
+                scale_factor,
+                is_primary: d.is_primary,
+            }
         })
         .collect()
 }
