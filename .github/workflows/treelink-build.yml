@@ -29,6 +29,8 @@ env:
   MACOSX_DEPLOYMENT_TARGET: '14.2'
   CMAKE_POLICY_VERSION_MINIMUM: '3.5'
   npm_config_engine_strict: 'false'
+  PYTHONUTF8: '1'
+  DOTNET_ROLL_FORWARD: 'Major'
 
 jobs:
   frontend:
