@@ -43,9 +43,14 @@ TARGET = "x86_64-pc-windows-msvc"
 
 
 def run(cmd: list[str | Path], *, cwd: Path = ROOT, env: dict[str, str] | None = None) -> None:
-    printable = " ".join(str(x) for x in cmd)
+    args = [str(x) for x in cmd]
+    if env is not None and not Path(args[0]).is_file():
+        resolved = shutil.which(args[0], path=env.get("PATH") or env.get("Path"))
+        if resolved:
+            args[0] = resolved
+    printable = " ".join(args)
     print(f"[TREE LINK Windows] $ {printable}", flush=True)
-    subprocess.run([str(x) for x in cmd], cwd=cwd, env=env, check=True)
+    subprocess.run(args, cwd=cwd, env=env, check=True)
 
 
 def sha256_file(path: Path) -> str:
@@ -57,9 +62,10 @@ def sha256_file(path: Path) -> str:
 
 
 def ensure_msvc_env(env: dict[str, str]) -> dict[str, str]:
-    if shutil.which("cl.exe", path=env.get("PATH")):
-        return env
-    vswhere = Path(env.get("ProgramFiles(x86)", r"C:\Program Files (x86)")) / "Microsoft Visual Studio/Installer/vswhere.exe"
+    merged = {k.upper(): v for k, v in env.items()}
+    if shutil.which("cl.exe", path=merged.get("PATH")):
+        return merged
+    vswhere = Path(merged.get("PROGRAMFILES(X86)", r"C:\Program Files (x86)")) / "Microsoft Visual Studio/Installer/vswhere.exe"
     location = subprocess.check_output(
         [
             str(vswhere),
@@ -77,11 +83,11 @@ def ensure_msvc_env(env: dict[str, str]) -> dict[str, str]:
     if not location or not devcmd.is_file():
         raise RuntimeError("MSVC x64 build tools are required")
     lines = subprocess.check_output(f'cmd.exe /d /s /c ""{devcmd}" -arch=x64 >nul && set"', text=True)
-    merged = env.copy()
     for line in lines.splitlines():
         key, sep, value = line.partition("=")
         if sep and key:
-            merged[key] = value
+            merged[key.upper()] = value
+            os.environ[key] = value
     return merged
 
 

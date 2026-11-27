@@ -1,5 +1,6 @@
 fn main() {
     println!("cargo:rerun-if-changed=native/macos_capture.m");
+    #[cfg(target_os = "macos")]
     if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("macos") {
         let mut native = cc::Build::new();
         native
