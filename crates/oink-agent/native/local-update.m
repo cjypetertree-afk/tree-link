@@ -1,34 +1,23 @@
-// No updater/feed settings change here. All slices and sealed nested code must
-// meet Apple's Developer ID requirement; notarization is a separate requirement.
+// Verify TREE LINK bundles and disk images against the compiled TREE LINK Code Signing
+// leaf certificate hash (no paid Apple Developer notarization required; online feeds
+// additionally verify Ed25519 + SHA-256 before mounting).
 #import <Foundation/Foundation.h>
 #import <Security/Security.h>
-#define DEVELOPER_ID @"anchor apple generic and certificate leaf[subject.OU] = \"893V37X2CW\" and certificate 1[field.1.2.840.113635.100.6.2.6] exists and certificate leaf[field.1.2.840.113635.100.6.1.13] exists"
-static NSString *const identityRequirement=DEVELOPER_ID @" and identifier \"com.hachiwii.oink\"";
-// A signed disk image's identifier is its file name, so only the team is required.
-static NSString *const imageRequirement=DEVELOPER_ID;
+#define TREELINK_CERT_SHA1 @"a303bf895b51000306b22feb65f2a5764c5f6bd2"
+#define TREELINK_LEAF @"certificate leaf = H\"" TREELINK_CERT_SHA1 @"\""
+static NSString *const identityRequirement=@"identifier \"com.treelink.app\" and " TREELINK_LEAF;
+static NSString *const imageRequirement=TREELINK_LEAF;
 static uint32_t verifyIdentity(const char *path, NSString *identity, BOOL bundle) {
     @autoreleasepool {
         NSURL *url=[NSURL fileURLWithPath:[NSString stringWithUTF8String:path]];
         SecStaticCodeRef code=NULL; SecRequirementRef requirement=NULL;
-        CFDictionaryRef info=NULL;
         uint32_t result=1;
-        NSNumber *flags=nil;
         SecCSFlags validity=bundle ? kSecCSCheckAllArchitectures|kSecCSStrictValidate : kSecCSStrictValidate;
         if (SecStaticCodeCreateWithPath((__bridge CFURLRef)url,kSecCSDefaultFlags,&code)!=errSecSuccess) goto done;
         if (SecRequirementCreateWithString((__bridge CFStringRef)identity,kSecCSDefaultFlags,&requirement)!=errSecSuccess) goto done;
         if (SecStaticCodeCheckValidity(code,validity|(bundle ? kSecCSCheckNestedCode : 0),requirement)!=errSecSuccess) goto done;
-        CFRelease(requirement); requirement=NULL;
-        if (bundle) {
-            if (SecCodeCopySigningInformation(code,kSecCSSigningInformation,&info)!=errSecSuccess) goto done;
-            flags=(__bridge NSNumber *)CFDictionaryGetValue(info,kSecCodeInfoFlags);
-            if (!(flags.unsignedIntValue & kSecCodeSignatureRuntime)) goto done;
-        }
-        result=2;
-        if (SecRequirementCreateWithString(CFSTR("notarized"),kSecCSDefaultFlags,&requirement)!=errSecSuccess) goto done;
-        if (SecStaticCodeCheckValidity(code,validity,requirement)!=errSecSuccess) goto done;
         result=0;
     done:
-        if (info) CFRelease(info);
         if (requirement) CFRelease(requirement);
         if (code) CFRelease(code);
         return result;

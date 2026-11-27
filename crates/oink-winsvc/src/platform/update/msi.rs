@@ -299,7 +299,7 @@ pub(super) fn local_metadata(path: &Path, length: u64, sha256: String) -> Result
         .into_iter()
         .map(|row| Ok((string(&row, 1)?, string(&row, 2)?)))
         .collect::<Result<_, Error>>()?;
-    if properties.get("ProductName").map(String::as_str) != Some("Oink")
+    if !matches!(properties.get("ProductName").map(String::as_str), Some("TREE LINK" | "Oink"))
         || properties.get("UpgradeCode").map(|v| v.trim_matches(['{', '}'])) != Some(UPGRADE)
     {
         return Err(Error::WrongProduct);
@@ -382,7 +382,7 @@ pub(super) fn inspect(
         .map(|row| Ok((string(&row, 1)?, string(&row, 2)?)))
         .collect::<Result<_, Error>>()?;
     let product_code = properties.get("ProductCode").ok_or(Error::Metadata)?.clone();
-    if properties.get("ProductName").map(String::as_str) != Some("Oink")
+    if !matches!(properties.get("ProductName").map(String::as_str), Some("TREE LINK" | "Oink"))
         || properties.get("UpgradeCode").map(|s| s.trim_matches(['{', '}'])) != Some(UPGRADE)
         || properties.get("ProductVersion")
             != Some(&format!(
@@ -443,7 +443,7 @@ pub(super) fn inspect(
             } else if name == "installed.json" {
                 let receipt: Receipt = oink_update::feed::strict_json(&bytes)?;
                 if receipt.schema != 1
-                    || receipt.product != "Oink"
+                    || !matches!(receipt.product.as_str(), "TREE LINK" | "Oink")
                     || receipt.build != expected_build
                     || receipt.source_tree_sha256 != release.source_tree_sha256
                     || receipt.version != release.version

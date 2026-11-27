@@ -289,7 +289,15 @@ pub(super) fn stage_image(destination: &Path, fill: impl FnOnce(&Path) -> Result
     let mut image = Image::new()?;
     let length = fill(&image.file())?;
     image.mount()?;
-    let source = image.mount_point().join("Oink.app");
+    let source = if image.mount_point().join("TREE LINK.app").exists() {
+        image.mount_point().join("TREE LINK.app")
+    } else {
+        image.mount_point().join("Oink.app")
+    };
+    let app_name = source
+        .file_name()
+        .and_then(|s| s.to_str())
+        .ok_or(Error::WrongProduct)?;
     if fs::symlink_metadata(&source)
         .map_err(|_| Error::WrongProduct)?
         .file_type()
@@ -299,7 +307,7 @@ pub(super) fn stage_image(destination: &Path, fill: impl FnOnce(&Path) -> Result
     }
     let canonical_source = fs::canonicalize(&source).map_err(|_| Error::CorruptPackage)?;
     tree(&source, &canonical_source, &mut 0)?;
-    let app = directory.path().join("Oink.app");
+    let app = directory.path().join(app_name);
     run(
         "copy_bundle",
         "/usr/bin/ditto",
@@ -307,7 +315,8 @@ pub(super) fn stage_image(destination: &Path, fill: impl FnOnce(&Path) -> Result
     )?;
     drop(image);
     let info = plist(&app.join("Contents/Info.plist"))?;
-    if field(&info, "CFBundleIdentifier")? != oink_update::PRODUCT {
+    let bundle_id = field(&info, "CFBundleIdentifier")?;
+    if bundle_id != "com.treelink.app" && bundle_id != oink_update::PRODUCT {
         return Err(Error::WrongProduct);
     }
     if field(&info, "CFBundleExecutable")? != "oink-backend" {
@@ -503,7 +512,7 @@ fn replacement_reopen_command(path: &Path, data_dir: &Path) -> Command {
 fn safe_stage(stage: &Path, destination: &Path) -> Result<(), Error> {
     let directory = stage.parent().ok_or(Error::Policy)?;
     let name = directory.file_name().and_then(|s| s.to_str()).ok_or(Error::Policy)?;
-    if stage.file_name().is_none_or(|s| s != "Oink.app")
+    if stage.file_name().is_none_or(|s| s != "TREE LINK.app" && s != "Oink.app")
         || !name.starts_with(".oink-local-")
         || !name.ends_with(".noindex")
     {

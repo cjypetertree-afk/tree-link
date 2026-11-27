@@ -523,9 +523,27 @@ def main() -> None:
 
     digest = sha256_file(msi_path)
     (out_dir / "SHA256SUMS-windows-x64.txt").write_text(f"{digest}  {msi_name}\n", encoding="utf-8")
+    (out_dir / "treelink-windows-x64-meta.json").write_text(
+        json.dumps(
+            {
+                "platform": "windows",
+                "arch": "x64",
+                "version": VERSION,
+                "build": build_num,
+                "source_commit": commit,
+                "source_tree_sha256": tree_hash,
+                "minimum_os": f"10.0.{IDENTITY['minimumWindowsBuild']}",
+                "package_name": msi_name,
+                "sha256": digest,
+            },
+            indent=2,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
     size_mb = msi_path.stat().st_size / (1024 * 1024)
     print(f"\n[TREE LINK Windows] MSI ready: {msi_path} ({size_mb:.1f} MB)")
-    print(f"[TREE LINK Windows] SHA-256: {digest}")
+    print(f"[TREE LINK Windows] Build: {build_num} | SHA-256: {digest}")
 
 
 if __name__ == "__main__":

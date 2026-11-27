@@ -417,7 +417,7 @@ export function RemotePane({
           <strong>{target.name}</strong>
           <span className="tl-badge" data-kind={target.linkClass}>{linkClassLabel(target.linkClass)}</span>
           {axGranted === false && (
-            <Button size="sm" variant="accent" onClick={() => sendJson({ type: 'request_permissions' })}>
+            <Button size="sm" variant="accent" className="tl-pane__btn--warn" onClick={() => sendJson({ type: 'request_permissions' })}>
               开启 Mac 辅助功能以操控
             </Button>
           )}
@@ -516,7 +516,7 @@ export function RemotePane({
           )}
           <Button size="sm" variant="ghost" title="全屏查看此 Mac" onClick={toggleFullscreen}>全屏</Button>
           <Button size="sm" variant="ghost" title="重连画面" onClick={() => setReconnectSeq(s => s + 1)}>重连</Button>
-          <Button size="sm" variant="ghost" title="关闭此控屏窗口" onClick={onClose}>关闭</Button>
+          <Button size="sm" variant="ghost" className="tl-pane__btn--danger" title="关闭此控屏窗口" onClick={onClose}>关闭</Button>
         </div>
       </header>
 

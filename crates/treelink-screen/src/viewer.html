@@ -7,12 +7,13 @@
   <title>TREE LINK — 多机实时桌面掌控台</title>
   <style>
     :root {
+      color-scheme: dark;
       --bg: #0b0f17;
       --surface: #131a26;
       --surface-2: #1a2333;
-      --border: rgba(255, 255, 255, 0.11);
+      --border: rgba(255, 255, 255, 0.14);
       --text: #eef3fb;
-      --muted: rgba(238, 243, 251, 0.68);
+      --muted: rgba(238, 243, 251, 0.76);
       --accent: #22c55e;
       --accent-2: #38bdf8;
       --warn: #f59e0b;
@@ -78,6 +79,13 @@
     }
     input:focus, select:focus {
       border-color: var(--accent);
+    }
+    select {
+      color-scheme: dark;
+    }
+    select option {
+      background-color: #131a26;
+      color: #eef3fb;
     }
     button {
       cursor: pointer;

@@ -35,8 +35,8 @@ fn registered_sessions(
 }
 const VERIFICATION_BUDGET: Duration = Duration::from_secs(120);
 /// Automatic checks: after a successful check, and after a failed one.
-const CHECK_INTERVAL: Duration = Duration::from_secs(24 * 3600);
-const RETRY_INTERVAL: Duration = Duration::from_secs(2 * 3600);
+const CHECK_INTERVAL: Duration = Duration::from_secs(30 * 60);
+const RETRY_INTERVAL: Duration = Duration::from_secs(10 * 60);
 
 pub(super) struct State {
     status: UpdateStatus,

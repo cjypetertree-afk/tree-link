@@ -19,9 +19,15 @@ import tempfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-IDENTITY = json.loads((ROOT / "packaging/identity.json").read_text())
+sys.path.insert(0, str(ROOT / "build-support"))
+from identity import IDENTITY, encode_build  # noqa: E402
+from report_manifest import write_manifest  # noqa: E402
+
 VERSION = IDENTITY["version"]
 MIN_MACOS = IDENTITY["macos_minimum"]
+TREELINK_CERT_SHA1 = "a303bf895b51000306b22feb65f2a5764c5f6bd2"
+DEFAULT_KEYCHAIN = Path.home() / ".config/treelink-signing/treelink-signing.keychain-db"
+DEFAULT_KEYCHAIN_PASS = Path.home() / ".config/treelink-signing/p12-password.txt"
 
 LOCALIZED_STRINGS = {
     "en": {
@@ -144,7 +150,62 @@ def build_binaries(target: str, env: dict[str, str], skip_frontend: bool) -> Pat
     return cargo_target / target / "release"
 
 
-def assemble_app(binaries: Path, app_path: Path, arch: str, build_label: str) -> None:
+def git_head_sha() -> str:
+    try:
+        return subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=ROOT, text=True).strip()
+    except Exception:
+        return "0" * 40
+
+
+def resolve_signing(args: argparse.Namespace) -> tuple[str, Path | None]:
+    """Use the persistent TREE LINK Code Signing cert when available so macOS TCC
+    keeps Screen Recording & Accessibility permissions permanently across updates."""
+    identity = args.sign_identity or os.environ.get("TREELINK_MAC_SIGN_IDENTITY", "").strip()
+    keychain_raw = args.keychain or os.environ.get("TREELINK_MAC_KEYCHAIN", "").strip()
+    keychain = Path(keychain_raw) if keychain_raw else None
+
+    if not identity and not keychain and DEFAULT_KEYCHAIN.is_file():
+        keychain = DEFAULT_KEYCHAIN
+        identity = TREELINK_CERT_SHA1
+        if DEFAULT_KEYCHAIN_PASS.is_file():
+            pw = DEFAULT_KEYCHAIN_PASS.read_text(encoding="utf-8").strip()
+            subprocess.run(["security", "unlock-keychain", "-p", pw, str(keychain)], check=False)
+
+    if identity:
+        return identity, keychain
+    return "-", None
+
+
+def codesign_item(
+    path: Path,
+    identity: str,
+    keychain: Path | None,
+    *,
+    identifier: str | None = None,
+    designated_req: str | None = None,
+) -> None:
+    cmd: list[str | Path] = ["codesign", "--force"]
+    if keychain is not None:
+        cmd.extend(["--keychain", keychain])
+    cmd.extend(["--sign", identity])
+    if identifier:
+        cmd.extend(["--identifier", identifier])
+    if designated_req and identity != "-":
+        cmd.extend(["--requirements", f"=designated => {designated_req}"])
+    cmd.append(path)
+    run(cmd)
+
+
+def assemble_app(
+    binaries: Path,
+    app_path: Path,
+    arch: str,
+    build_num: int,
+    commit: str,
+    tree_hash: str,
+    identity: str,
+    keychain: Path | None,
+) -> None:
     if app_path.exists():
         shutil.rmtree(app_path)
     mac_dir = app_path / "Contents/MacOS"
@@ -180,7 +241,7 @@ def assemble_app(binaries: Path, app_path: Path, arch: str, build_label: str) ->
             "CFBundleDisplayName": "TREE LINK",
             "CFBundlePackageType": "APPL",
             "CFBundleShortVersionString": VERSION,
-            "CFBundleVersion": build_label,
+            "CFBundleVersion": str(build_num),
             "CFBundleIconFile": "icon.icns",
             "CFBundleDevelopmentRegion": "en",
             "CFBundleLocalizations": ["en", "zh-Hans"],
@@ -199,7 +260,8 @@ def assemble_app(binaries: Path, app_path: Path, arch: str, build_label: str) ->
         "CFBundleDisplayName": "TREE LINK",
         "CFBundlePackageType": "APPL",
         "CFBundleShortVersionString": VERSION,
-        "CFBundleVersion": build_label,
+        "CFBundleVersion": str(build_num),
+        "CFBundleGetInfoString": VERSION,
         "CFBundleIconFile": "icon.icns",
         "CFBundleDevelopmentRegion": "en",
         "CFBundleLocalizations": ["en", "zh-Hans"],
@@ -212,21 +274,78 @@ def assemble_app(binaries: Path, app_path: Path, arch: str, build_label: str) ->
     write_plist(app_path / "Contents/Info.plist", main_info)
     write_lproj(app_path, include_permissions=True)
 
+    # Report manifest & embedded release notes required by macOS in-app updater.
+    write_manifest(
+        res_dir / "report-manifest.json",
+        tree_hash,
+        VERSION,
+        build_num,
+        [
+            ("agent", mac_dir / "oink-backend"),
+            ("agent", mac_dir / "oink-agent"),
+            ("ui_rust", helper / "Contents/MacOS/oink"),
+        ],
+    )
+    (res_dir / "oink-update-notes.json").write_text(
+        json.dumps(
+            {
+                "schema": 1,
+                "kind": "inhouse",
+                "build": build_num,
+                "source_commit": commit,
+                "previous": None,
+                "notes": {
+                    "en": "TREE LINK multi-Mac real-time 60fps remote desktop, KVM, clipboard sync, file transfer, and audio.",
+                    "zh-Hans": "TREE LINK 多 Mac 实时 60fps 远程桌面、键鼠共享、剪贴板同步、文件直传与低延迟音频。",
+                },
+            },
+            ensure_ascii=False,
+            indent=2,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
     metadata = {
         "schema": 1,
         "product": "TREE LINK",
         "derivedFrom": "Oink",
         "version": VERSION,
-        "build": build_label,
+        "build": build_num,
+        "source_commit": commit,
+        "source_tree_sha256": tree_hash,
         "architecture": arch,
         "minimum_os": MIN_MACOS,
-        "signing": "ad-hoc",
+        "signing": "persistent-cert" if identity != "-" else "ad-hoc",
     }
     (res_dir / "treelink-build.json").write_text(json.dumps(metadata, indent=2) + "\n", encoding="utf-8")
 
-    # Bottom-up ad-hoc signing so nested signatures stay valid for macOS TCC.
-    run(["codesign", "--force", "--sign", "-", "--identifier", IDENTITY["macos"]["ui_id"], helper])
-    run(["codesign", "--force", "--sign", "-", "--identifier", "com.treelink.app", app_path])
+    # Bottom-up signing with persistent TREE LINK Code Signing certificate & fixed
+    # Designated Requirement so macOS TCC never resets Screen Recording / Accessibility!
+    leaf_req = f'certificate leaf = H"{TREELINK_CERT_SHA1}"' if identity.lower() == TREELINK_CERT_SHA1 else None
+    for exe_name in ["oink-agent", "oink-crash-collector", "treelink-screen-host"]:
+        codesign_item(
+            mac_dir / exe_name,
+            identity,
+            keychain,
+            identifier=f"com.treelink.{exe_name}",
+            designated_req=f'identifier "com.treelink.{exe_name}" and {leaf_req}' if leaf_req else None,
+        )
+    ui_id = IDENTITY["macos"]["ui_id"]
+    codesign_item(
+        helper,
+        identity,
+        keychain,
+        identifier=ui_id,
+        designated_req=f'identifier "{ui_id}" and {leaf_req}' if leaf_req else None,
+    )
+    codesign_item(
+        app_path,
+        identity,
+        keychain,
+        identifier="com.treelink.app",
+        designated_req=f'identifier "com.treelink.app" and {leaf_req}' if leaf_req else None,
+    )
     run(["codesign", "--verify", "--deep", "--strict", "--verbose=2", app_path])
 
 
@@ -303,20 +422,34 @@ def main() -> None:
     parser.add_argument("--binaries-dir", type=Path, help="Use precompiled release binaries instead of building")
     parser.add_argument("--skip-frontend", action="store_true")
     parser.add_argument("--skip-smoke", action="store_true")
-    parser.add_argument("--build-label", default="1")
+    parser.add_argument("--build-label", default="1", help="Build sequence number (1..999)")
+    parser.add_argument("--sign-identity", default="", help="Codesign identity or SHA-1")
+    parser.add_argument("--keychain", default="", help="Keychain path containing signing identity")
     args = parser.parse_args()
 
     if platform.system() != "Darwin":
         raise SystemExit("scripts/package-macos.py must be run on macOS")
+
+    seq = ((max(1, int(args.build_label)) - 1) % 999) + 1
+    build_num = encode_build(VERSION, seq)
+    commit = git_head_sha()
+    tree_hash = hashlib.sha256(commit.encode()).hexdigest()
 
     target = "aarch64-apple-darwin" if args.arch == "arm64" else "x86_64-apple-darwin"
     env = os.environ.copy()
     env["MACOSX_DEPLOYMENT_TARGET"] = MIN_MACOS
     env["CMAKE_POLICY_VERSION_MINIMUM"] = "3.5"
     env["npm_config_engine_strict"] = "false"
+    env["OINK_RELEASE_BUILD"] = env["RELEASE_BUILD"] = str(build_num)
+    env["OINK_RELEASE_VERSION"] = VERSION
+    env["OINK_SOURCE_COMMIT"] = commit
+    env["OINK_SOURCE_TREE_SHA256"] = tree_hash
     cargo_bin = Path.home() / ".cargo/bin"
     local_bin = Path.home() / ".local/bin"
     env["PATH"] = f"{cargo_bin}:{local_bin}:{env.get('PATH', '')}"
+
+    identity, keychain = resolve_signing(args)
+    print(f"[TREE LINK macOS] Version {VERSION}, build {build_num} (seq={seq}), signer={identity}", flush=True)
 
     binaries = args.binaries_dir or build_binaries(target, env, args.skip_frontend)
     out_dir = args.output_dir.resolve()
@@ -326,18 +459,39 @@ def main() -> None:
     dmg_name = f"TREE-LINK-{VERSION}-macos-{args.arch}.dmg"
     dmg_path = out_dir / dmg_name
 
-    assemble_app(binaries, app_path, args.arch, args.build_label)
+    assemble_app(binaries, app_path, args.arch, build_num, commit, tree_hash, identity, keychain)
     if not args.skip_smoke:
         run_smoke_test(app_path)
     create_dmg(app_path, dmg_path)
+    if identity != "-":
+        leaf_req = f'certificate leaf = H"{TREELINK_CERT_SHA1}"' if identity.lower() == TREELINK_CERT_SHA1 else None
+        codesign_item(dmg_path, identity, keychain, designated_req=leaf_req)
 
     digest = sha256_file(dmg_path)
     sums_path = out_dir / f"SHA256SUMS-macos-{args.arch}.txt"
     sums_path.write_text(f"{digest}  {dmg_name}\n", encoding="utf-8")
+    (out_dir / f"treelink-mac-{args.arch}-meta.json").write_text(
+        json.dumps(
+            {
+                "platform": "mac",
+                "arch": args.arch,
+                "version": VERSION,
+                "build": build_num,
+                "source_commit": commit,
+                "source_tree_sha256": tree_hash,
+                "minimum_os": MIN_MACOS,
+                "package_name": dmg_name,
+                "sha256": digest,
+            },
+            indent=2,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
 
     size_mb = dmg_path.stat().st_size / (1024 * 1024)
     print(f"\n[TREE LINK macOS] Package ready: {dmg_path} ({size_mb:.1f} MB)")
-    print(f"[TREE LINK macOS] SHA-256: {digest}")
+    print(f"[TREE LINK macOS] Build: {build_num} | SHA-256: {digest}")
 
 
 if __name__ == "__main__":

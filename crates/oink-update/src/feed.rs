@@ -51,7 +51,7 @@ pub(crate) fn feed_origin() -> &'static str {
     }
     #[cfg(not(feature = "test-feed"))]
     {
-        "https://updates.oink.hachiwii.com"
+        "https://raw.githubusercontent.com/cjypetertree-afk/tree-link/updates"
     }
 }
 

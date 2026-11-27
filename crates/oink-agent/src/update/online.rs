@@ -13,8 +13,8 @@ use std::{
     sync::{Arc, Weak, mpsc},
 };
 
-const AFTER_SUCCESS: Duration = Duration::from_secs(24 * 60 * 60);
-const AFTER_FAILURE: Duration = Duration::from_secs(2 * 60 * 60);
+const AFTER_SUCCESS: Duration = Duration::from_secs(30 * 60);
+const AFTER_FAILURE: Duration = Duration::from_secs(10 * 60);
 
 #[derive(Debug, Default)]
 pub(super) struct Online {

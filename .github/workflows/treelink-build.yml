@@ -5,6 +5,8 @@ on:
     branches: [main, dev/remote-desktop]
     tags: ['v*']
   pull_request:
+  schedule:
+    - cron: '0 3 * * 1'
   workflow_dispatch:
     inputs:
       publish_release:
@@ -14,7 +16,11 @@ on:
       release_tag:
         description: Release tag name (when publish_release is true)
         type: string
-        default: v0.3.7-treelink.3
+        default: v0.3.7-treelink.4
+      refresh_feed_only:
+        description: Only refresh the Ed25519 update feed expiration timestamp on the updates branch
+        type: boolean
+        default: false
 
 permissions:
   contents: write
@@ -34,6 +40,7 @@ env:
 
 jobs:
   frontend:
+    if: github.event_name != 'schedule' && !(github.event_name == 'workflow_dispatch' && inputs.refresh_feed_only)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -51,6 +58,7 @@ jobs:
 
   package-macos:
     needs: frontend
+    if: startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && !inputs.refresh_feed_only)
     runs-on: macos-15
     timeout-minutes: 60
     steps:
@@ -70,22 +78,52 @@ jobs:
           cache-dependency-path: package-lock.json
       - name: Install frontend dependencies
         run: npm ci
-      - name: Test & lint treelink-screen
+      - name: Test & lint treelink-screen and oink-update
         run: |
           cargo test -p treelink-screen --target aarch64-apple-darwin
           cargo clippy -p treelink-screen --all-targets --target aarch64-apple-darwin -- -D warnings
+          cargo test -p oink-update --target aarch64-apple-darwin
+      - name: Import TREE LINK persistent Code Signing certificate (if configured)
+        env:
+          CERT_P12_B64: ${{ secrets.TREELINK_MAC_CERT_P12 }}
+          CERT_PASS: ${{ secrets.TREELINK_MAC_CERT_PASSWORD }}
+        run: |
+          if [[ -n "$CERT_P12_B64" && -n "$CERT_PASS" ]]; then
+            KC="$RUNNER_TEMP/treelink-signing.keychain-db"
+            P12="$RUNNER_TEMP/treelink-codesign.p12"
+            printf '%s' "$CERT_P12_B64" | base64 --decode > "$P12"
+            security create-keychain -p "$CERT_PASS" "$KC"
+            security set-keychain-settings -lut 3600 "$KC"
+            security unlock-keychain -p "$CERT_PASS" "$KC"
+            security import "$P12" -k "$KC" -P "$CERT_PASS" -T /usr/bin/codesign -T /usr/bin/security
+            security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$CERT_PASS" "$KC" >/dev/null
+            rm -f "$P12"
+            echo "TREELINK_MAC_KEYCHAIN=$KC" >> "$GITHUB_ENV"
+            echo "TREELINK_MAC_SIGN_IDENTITY=a303bf895b51000306b22feb65f2a5764c5f6bd2" >> "$GITHUB_ENV"
+            echo "Loaded persistent TREE LINK Code Signing certificate."
+          else
+            echo "No persistent cert secret configured; falling back to ad-hoc signing."
+          fi
       - name: Build TREE LINK macOS .dmg installer
-        run: python3 scripts/package-macos.py --arch arm64 --output-dir dist-packages --build-label "${{ github.run_number }}"
+        env:
+          TAG_NAME: ${{ startsWith(github.ref, 'refs/tags/v') && github.ref_name || inputs.release_tag }}
+        run: |
+          SEQ="$(printf '%s' "$TAG_NAME" | sed -nE 's/.*\.([0-9]+)$/\1/p')"
+          SEQ="${SEQ:-${GITHUB_RUN_NUMBER}}"
+          echo "Using build sequence: $SEQ"
+          python3 scripts/package-macos.py --arch arm64 --output-dir dist-packages --build-label "$SEQ"
       - uses: actions/upload-artifact@v4
         with:
           name: TREE-LINK-macos-arm64-dmg
           path: |
             dist-packages/TREE-LINK-*-macos-arm64.dmg
             dist-packages/SHA256SUMS-macos-arm64.txt
+            dist-packages/treelink-mac-arm64-meta.json
           if-no-files-found: error
 
   package-windows:
     needs: frontend
+    if: startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && !inputs.refresh_feed_only)
     runs-on: windows-2022
     timeout-minutes: 60
     steps:
@@ -108,25 +146,41 @@ jobs:
           python-version: '3.12'
       - name: Install frontend dependencies
         run: npm ci
-      - name: Test & lint treelink-screen
+      - name: Test & lint treelink-screen and oink-update
         run: |
           cargo test -p treelink-screen --target x86_64-pc-windows-msvc
           cargo clippy -p treelink-screen --all-targets --target x86_64-pc-windows-msvc -- -D warnings
+          cargo test -p oink-update --target x86_64-pc-windows-msvc
       - name: Build TREE LINK Windows x64 .msi installer
-        run: python scripts/package-windows.py --output-dir dist-packages --sequence "${{ github.run_number }}"
+        shell: bash
+        env:
+          TAG_NAME: ${{ startsWith(github.ref, 'refs/tags/v') && github.ref_name || inputs.release_tag }}
+        run: |
+          SEQ="$(printf '%s' "$TAG_NAME" | sed -nE 's/.*\.([0-9]+)$/\1/p')"
+          SEQ="${SEQ:-${GITHUB_RUN_NUMBER}}"
+          echo "Using build sequence: $SEQ"
+          python scripts/package-windows.py --output-dir dist-packages --sequence "$SEQ"
       - uses: actions/upload-artifact@v4
         with:
           name: TREE-LINK-windows-x64-msi
           path: |
             dist-packages/TREE-LINK-*-windows-x64.msi
             dist-packages/SHA256SUMS-windows-x64.txt
+            dist-packages/treelink-windows-x64-meta.json
           if-no-files-found: error
 
   release:
     needs: [package-macos, package-windows]
-    if: startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && inputs.publish_release)
+    if: always() && (startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && inputs.publish_release && !inputs.refresh_feed_only)) && (needs.package-macos.result == 'success' || needs.package-windows.result == 'success')
     runs-on: ubuntu-latest
     steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: '1.99.0'
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: treelink-release-signer
       - uses: actions/download-artifact@v4
         with:
           path: release-assets
@@ -137,30 +191,134 @@ jobs:
           GH_REPO: ${{ github.repository }}
           TAG: ${{ startsWith(github.ref, 'refs/tags/v') && github.ref_name || inputs.release_tag }}
         run: |
-          cat release-assets/SHA256SUMS-*.txt > release-assets/SHA256SUMS.txt
-          rm -f release-assets/SHA256SUMS-*.txt
-          ls -la release-assets
+          shopt -s nullglob
+          sum_files=(release-assets/SHA256SUMS-*.txt)
+          if (( ${#sum_files[@]} > 0 )); then
+            cat "${sum_files[@]}" > release-assets/SHA256SUMS.txt
+          fi
+          upload_files=(release-assets/*.dmg release-assets/*.msi release-assets/SHA256SUMS.txt)
+          ls -la "${upload_files[@]}"
           if gh release view "$TAG" --repo "$GH_REPO" >/dev/null 2>&1; then
-            gh release upload "$TAG" release-assets/* --repo "$GH_REPO" --clobber
+            gh release upload "$TAG" "${upload_files[@]}" --repo "$GH_REPO" --clobber
           else
-            gh release create "$TAG" release-assets/* \
+            gh release create "$TAG" "${upload_files[@]}" \
               --repo "$GH_REPO" \
               --title "TREE LINK $TAG" \
-              --notes "## TREE LINK 安装包 (Q版小树图标 · 默认实时控屏 · 单机/双机自由切换)
+              --notes "## TREE LINK 安装包 (支持 App 内自动推送更新 · Q版小树图标 · 默认实时控屏)
 
-          - **macOS (Apple Silicon)**: 下载 \`TREE-LINK-0.3.7-macos-arm64.dmg\`，或运行一行自动安装/更新：
+          - **App 内直接升级**：已安装支持在线更新版本的 Mac / Windows 设备会在软件右上角自动提示 **「更新」**，一键无缝升级（Mac 固定签名证书，不再重置录屏/辅助功能权限；Windows 免弹窗静默升级）。
+          - **macOS (Apple Silicon) 首次安装 / 更新**：
             \`\`\`bash
             curl -fsSL https://raw.githubusercontent.com/cjypetertree-afk/tree-link/main/scripts/install-mac.sh | bash
             \`\`\`
-          - **Windows 10/11 (64位)**: 下载 \`TREE-LINK-0.3.7-windows-x64.msi\`，或 PowerShell 运行一行自动安装/更新：
+          - **Windows 10/11 (64位) 首次安装 / 更新**：
             \`\`\`powershell
             irm https://raw.githubusercontent.com/cjypetertree-afk/tree-link/main/scripts/install-windows.ps1 | iex
-            \`\`\`
-
-          ### 核心特性
-          - 打开默认进入 **TREE LINK 实时控屏** 主界面，单台专注 / 双台同屏独立自由切换
-          - 全新 Q 版小树图标与全界面 TREE LINK 品牌化（保留完整 GPL-3.0 衍生许可与归属声明）
-          - 零延迟本地光标模式 + 250Hz 二进制鼠键操控 + 60fps 硬件 H.264/HEVC
-          - 完整保留跨机键鼠 KVM、拖拽传文件、剪贴板同步与低延迟音频" \
+            \`\`\`" \
               --latest
+          fi
+      - name: Sign & publish Ed25519 v2 update feed to updates branch
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ startsWith(github.ref, 'refs/tags/v') && github.ref_name || inputs.release_tag }}
+          TREELINK_UPDATE_KEY_MAC: ${{ secrets.TREELINK_UPDATE_KEY_MAC }}
+          TREELINK_UPDATE_KEY_WINDOWS: ${{ secrets.TREELINK_UPDATE_KEY_WINDOWS }}
+        run: |
+          if [[ -z "$TREELINK_UPDATE_KEY_MAC" && -z "$TREELINK_UPDATE_KEY_WINDOWS" ]]; then
+            echo "Update signing keys not configured; skipping feed publish."
+            exit 0
+          fi
+          FEED_DIR="$RUNNER_TEMP/updates-branch"
+          rm -rf "$FEED_DIR"
+          if git ls-remote --exit-code --heads "https://x-access-token:${GH_TOKEN}@github.com/${GH_REPO}.git" updates >/dev/null 2>&1; then
+            git clone --depth 1 --branch updates "https://x-access-token:${GH_TOKEN}@github.com/${GH_REPO}.git" "$FEED_DIR"
+          else
+            mkdir -p "$FEED_DIR"
+            git -C "$FEED_DIR" init -b updates
+            git -C "$FEED_DIR" remote add origin "https://x-access-token:${GH_TOKEN}@github.com/${GH_REPO}.git"
+          fi
+
+          if [[ -n "$TREELINK_UPDATE_KEY_MAC" && -f release-assets/treelink-mac-arm64-meta.json ]]; then
+            eval "$(python3 - <<'PY'
+import json, shlex
+d = json.load(open("release-assets/treelink-mac-arm64-meta.json"))
+for k, v in [("M_BUILD", d["build"]), ("M_VER", d["version"]), ("M_TREE", d["source_tree_sha256"]), ("M_OS", d["minimum_os"]), ("M_FILE", d["package_name"])]:
+    print(f"{k}={shlex.quote(str(v))}")
+PY
+)"
+            cargo run --release --locked -p oink-update --example sign_feed -- \
+              --platform mac --arch arm64 \
+              --build "$M_BUILD" --version "$M_VER" --tag "$TAG" \
+              --source-tree-sha256 "$M_TREE" --minimum-os "$M_OS" \
+              --package-file "release-assets/$M_FILE" \
+              --package-url "https://github.com/${GH_REPO}/releases/download/${TAG}/${M_FILE}" \
+              --notes-en "TREE LINK $TAG: crisp high-contrast remote control toolbar & dropdown colors, in-app OTA updates, persistent macOS signing." \
+              --notes-zh "TREE LINK $TAG：修复控屏栏菜单与下拉选项文字配色，启用 App 内一键推送更新与固定证书防掉权限。" \
+              --output-dir "$FEED_DIR"
+          fi
+
+          if [[ -n "$TREELINK_UPDATE_KEY_WINDOWS" && -f release-assets/treelink-windows-x64-meta.json ]]; then
+            eval "$(python3 - <<'PY'
+import json, shlex
+d = json.load(open("release-assets/treelink-windows-x64-meta.json"))
+for k, v in [("W_BUILD", d["build"]), ("W_VER", d["version"]), ("W_TREE", d["source_tree_sha256"]), ("W_OS", d["minimum_os"]), ("W_FILE", d["package_name"])]:
+    print(f"{k}={shlex.quote(str(v))}")
+PY
+)"
+            cargo run --release --locked -p oink-update --example sign_feed -- \
+              --platform windows --arch x64 \
+              --build "$W_BUILD" --version "$W_VER" --tag "$TAG" \
+              --source-tree-sha256 "$W_TREE" --minimum-os "$W_OS" \
+              --package-file "release-assets/$W_FILE" \
+              --package-url "https://github.com/${GH_REPO}/releases/download/${TAG}/${W_FILE}" \
+              --notes-en "TREE LINK $TAG: crisp high-contrast remote control toolbar & dropdown colors, in-app silent OTA updates." \
+              --notes-zh "TREE LINK $TAG：修复控屏栏菜单与下拉选项文字配色，启用 App 内静默推送更新。" \
+              --output-dir "$FEED_DIR"
+          fi
+
+          git -C "$FEED_DIR" config user.name "github-actions[bot]"
+          git -C "$FEED_DIR" config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git -C "$FEED_DIR" add -A
+          if ! git -C "$FEED_DIR" diff --cached --quiet; then
+            git -C "$FEED_DIR" commit -m "chore(updates): publish signed feed for $TAG"
+            git -C "$FEED_DIR" push origin HEAD:updates
+          fi
+
+  refresh-feed:
+    if: github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.refresh_feed_only)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: '1.99.0'
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: treelink-release-signer
+      - name: Refresh signed catalog expiry on updates branch
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          TREELINK_UPDATE_KEY_MAC: ${{ secrets.TREELINK_UPDATE_KEY_MAC }}
+          TREELINK_UPDATE_KEY_WINDOWS: ${{ secrets.TREELINK_UPDATE_KEY_WINDOWS }}
+        run: |
+          if [[ -z "$TREELINK_UPDATE_KEY_MAC" && -z "$TREELINK_UPDATE_KEY_WINDOWS" ]]; then
+            echo "Update signing keys not configured."
+            exit 0
+          fi
+          FEED_DIR="$RUNNER_TEMP/updates-branch"
+          if ! git ls-remote --exit-code --heads "https://x-access-token:${GH_TOKEN}@github.com/${GH_REPO}.git" updates >/dev/null 2>&1; then
+            echo "No updates branch yet."
+            exit 0
+          fi
+          git clone --depth 1 --branch updates "https://x-access-token:${GH_TOKEN}@github.com/${GH_REPO}.git" "$FEED_DIR"
+          cargo run --release --locked -p oink-update --example sign_feed -- \
+            --refresh-dir "$FEED_DIR"
+          git -C "$FEED_DIR" config user.name "github-actions[bot]"
+          git -C "$FEED_DIR" config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git -C "$FEED_DIR" add -A
+          if ! git -C "$FEED_DIR" diff --cached --quiet; then
+            git -C "$FEED_DIR" commit -m "chore(updates): refresh feed expiry"
+            git -C "$FEED_DIR" push origin HEAD:updates
           fi

@@ -54,7 +54,7 @@ int oink_startup_alert(int screen, bool zh, int exitCode, const char *detail, co
             if (choice == 0 && screen == 8)
                 [NSWorkspace.sharedWorkspace openURL:[NSURL fileURLWithPath:@"/Applications" isDirectory:YES]];
             else if (choice == 0 && screen == 10)
-                [NSWorkspace.sharedWorkspace openURL:[NSURL URLWithString:@"https://github.com/oinkvm/oink/releases/latest"]];
+                [NSWorkspace.sharedWorkspace openURL:[NSURL URLWithString:@"https://github.com/cjypetertree-afk/tree-link/releases/latest"]];
             else if (choice == 1 && screen == 11) {
                 [NSWorkspace.sharedWorkspace openURL:logURL];
                 continue;
