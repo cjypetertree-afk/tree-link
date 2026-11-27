@@ -240,40 +240,28 @@ jobs:
           fi
 
           if [[ -n "$TREELINK_UPDATE_KEY_MAC" && -f release-assets/treelink-mac-arm64-meta.json ]]; then
-            eval "$(python3 - <<'PY'
-import json, shlex
-d = json.load(open("release-assets/treelink-mac-arm64-meta.json"))
-for k, v in [("M_BUILD", d["build"]), ("M_VER", d["version"]), ("M_TREE", d["source_tree_sha256"]), ("M_OS", d["minimum_os"]), ("M_FILE", d["package_name"])]:
-    print(f"{k}={shlex.quote(str(v))}")
-PY
-)"
+            eval "$(python3 -c 'import json, shlex; d = json.load(open("release-assets/treelink-mac-arm64-meta.json")); print("\n".join(f"{k}={shlex.quote(str(d[f]))}" for k, f in [("M_BUILD","build"),("M_VER","version"),("M_TREE","source_tree_sha256"),("M_OS","minimum_os"),("M_FILE","package_name")]))')"
             cargo run --release --locked -p oink-update --example sign_feed -- \
               --platform mac --arch arm64 \
               --build "$M_BUILD" --version "$M_VER" --tag "$TAG" \
               --source-tree-sha256 "$M_TREE" --minimum-os "$M_OS" \
               --package-file "release-assets/$M_FILE" \
               --package-url "https://github.com/${GH_REPO}/releases/download/${TAG}/${M_FILE}" \
-              --notes-en "TREE LINK $TAG: crisp high-contrast remote control toolbar & dropdown colors, in-app OTA updates, persistent macOS signing." \
-              --notes-zh "TREE LINK $TAG：修复控屏栏菜单与下拉选项文字配色，启用 App 内一键推送更新与固定证书防掉权限。" \
+              --notes-en "TREE LINK $TAG: bidirectional Mac<->Windows remote desktop, minimize recovery, Q-tree icons, independent OTA updates, persistent macOS signing." \
+              --notes-zh "TREE LINK $TAG：支持 Mac 控 Windows 双向控屏、修复最小化黑屏、Q版小树任务栏图标、彻底独立于 Oink 并启用 App 内推送更新。" \
               --output-dir "$FEED_DIR"
           fi
 
           if [[ -n "$TREELINK_UPDATE_KEY_WINDOWS" && -f release-assets/treelink-windows-x64-meta.json ]]; then
-            eval "$(python3 - <<'PY'
-import json, shlex
-d = json.load(open("release-assets/treelink-windows-x64-meta.json"))
-for k, v in [("W_BUILD", d["build"]), ("W_VER", d["version"]), ("W_TREE", d["source_tree_sha256"]), ("W_OS", d["minimum_os"]), ("W_FILE", d["package_name"])]:
-    print(f"{k}={shlex.quote(str(v))}")
-PY
-)"
+            eval "$(python3 -c 'import json, shlex; d = json.load(open("release-assets/treelink-windows-x64-meta.json")); print("\n".join(f"{k}={shlex.quote(str(d[f]))}" for k, f in [("W_BUILD","build"),("W_VER","version"),("W_TREE","source_tree_sha256"),("W_OS","minimum_os"),("W_FILE","package_name")]))')"
             cargo run --release --locked -p oink-update --example sign_feed -- \
               --platform windows --arch x64 \
               --build "$W_BUILD" --version "$W_VER" --tag "$TAG" \
               --source-tree-sha256 "$W_TREE" --minimum-os "$W_OS" \
               --package-file "release-assets/$W_FILE" \
               --package-url "https://github.com/${GH_REPO}/releases/download/${TAG}/${W_FILE}" \
-              --notes-en "TREE LINK $TAG: crisp high-contrast remote control toolbar & dropdown colors, in-app silent OTA updates." \
-              --notes-zh "TREE LINK $TAG：修复控屏栏菜单与下拉选项文字配色，启用 App 内静默推送更新。" \
+              --notes-en "TREE LINK $TAG: native Windows screen capture & input host, minimize recovery, Q-tree taskbar icons, independent silent OTA updates." \
+              --notes-zh "TREE LINK $TAG：新增 Windows 原生画面采集与键鼠受控（支持 Mac 控 Windows）、修复最小化丢画面、更新 Q版小树任务栏图标并启用静默推送更新。" \
               --output-dir "$FEED_DIR"
           fi
 
