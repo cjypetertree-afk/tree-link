@@ -5,9 +5,14 @@
 set -euo pipefail
 
 REPO="cjypetertree-afk/tree-link"
-TAG="${TREELINK_TAG:-v0.3.7-treelink.1}"
 DMG_NAME="TREE-LINK-0.3.7-macos-arm64.dmg"
-DOWNLOAD_URL="https://github.com/${REPO}/releases/download/${TAG}/${DMG_NAME}"
+if [[ -n "${TREELINK_TAG:-}" ]]; then
+  DOWNLOAD_URL="https://github.com/${REPO}/releases/download/${TREELINK_TAG}/${DMG_NAME}"
+  LABEL="${TREELINK_TAG}"
+else
+  DOWNLOAD_URL="https://github.com/${REPO}/releases/latest/download/${DMG_NAME}"
+  LABEL="latest"
+fi
 
 TMP_DIR="$(mktemp -d /tmp/treelink-install.XXXXXX)"
 MOUNT_POINT="${TMP_DIR}/mnt"
@@ -21,7 +26,7 @@ cleanup() {
 }
 trap cleanup EXIT
 
-echo "==> [1/4] Downloading ${DMG_NAME} (${TAG})..."
+echo "==> [1/4] Downloading ${DMG_NAME} (${LABEL})..."
 curl -fL --progress-bar "${DOWNLOAD_URL}" -o "${DMG_PATH}"
 
 echo "==> [2/4] Mounting installer image..."

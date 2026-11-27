@@ -8,16 +8,19 @@ import './remoteDesktop.css';
 
 interface RemoteWorkbenchProps {
   devices: Device[];
+  pickRequest?: { deviceId: string; seq: number } | null;
   onToggleSpeakerMute: (deviceId: string) => void;
 }
 
-type LayoutMode = 'split-h' | 'split-v' | 'single';
+type LayoutMode = 'single' | 'split-h' | 'split-v';
 
-export function RemoteWorkbench({ devices, onToggleSpeakerMute }: RemoteWorkbenchProps) {
+export function RemoteWorkbench({ devices, pickRequest, onToggleSpeakerMute }: RemoteWorkbenchProps) {
   const [status, setStatus] = useState<RemoteDesktopStatus | null>(null);
   const [loading, setLoading] = useState<boolean>(true);
   const [activeTargets, setActiveTargets] = useState<RemoteTarget[]>([]);
   const [layout, setLayout] = useState<LayoutMode>('split-h');
+  const [soloTargetId, setSoloTargetId] = useState<string | null>(null);
+  const [showManualForm, setShowManualForm] = useState<boolean>(false);
   const [manualIp, setManualIp] = useState<string>('');
   const [manualPort, setManualPort] = useState<string>('47474');
   const [manualToken, setManualToken] = useState<string>('');
@@ -49,47 +52,66 @@ export function RemoteWorkbench({ devices, onToggleSpeakerMute }: RemoteWorkbenc
     return () => window.clearInterval(timer);
   }, [refresh]);
 
-  const openPeer = (peerId: string) => {
+  const makePeerTarget = useCallback((peerId: string): RemoteTarget | null => {
     const peer = status?.peers.find(p => p.device === peerId);
-    if (!peer) return;
+    if (!peer) return null;
     const best = pickBestInterface(peer.rankedIps);
-    if (!best) return;
-    setActiveTargets(prev => {
-      if (prev.some(t => t.id === peer.device)) return prev;
-      return [...prev, {
-        id: peer.device,
-        deviceId: peer.device,
-        name: peer.name,
-        ip: best.ip,
-        port: peer.defaultPort,
-        token: status?.authToken ?? '',
-        linkClass: best.linkClass,
-      }];
-    });
-  };
+    if (!best) return null;
+    return {
+      id: peer.device,
+      deviceId: peer.device,
+      name: peer.name,
+      ip: best.ip,
+      port: peer.defaultPort,
+      token: status?.authToken ?? '',
+      linkClass: best.linkClass,
+    };
+  }, [status]);
 
-  const openAllMacs = () => {
-    if (!status) return;
-    const macs = status.peers.filter(p => p.os === 'macos' && p.rankedIps.length > 0);
-    setActiveTargets(prev => {
-      const next = [...prev];
-      for (const peer of macs) {
-        if (next.some(t => t.id === peer.device)) continue;
-        const best = pickBestInterface(peer.rankedIps);
-        if (!best) continue;
-        next.push({
-          id: peer.device,
-          deviceId: peer.device,
-          name: peer.name,
-          ip: best.ip,
-          port: peer.defaultPort,
-          token: status.authToken,
-          linkClass: best.linkClass,
-        });
+  // Independently toggle a single device ON or OFF, or switch active target in single-screen mode.
+  const handlePeerClick = useCallback((peerId: string) => {
+    const alreadyOpen = activeTargets.some(t => t.id === peerId);
+    if (layout === 'single') {
+      if (!alreadyOpen) {
+        const target = makePeerTarget(peerId);
+        if (!target) return;
+        setActiveTargets(prev => (prev.some(t => t.id === target.id) ? prev : [...prev, target]));
       }
-      return next;
-    });
-  };
+      setSoloTargetId(peerId);
+      return;
+    }
+
+    // Multi-screen mode (split-h / split-v): independently add or remove JUST this computer.
+    if (alreadyOpen) {
+      setActiveTargets(prev => prev.filter(t => t.id !== peerId));
+      setSoloTargetId(prev => (prev === peerId ? null : prev));
+    } else {
+      const target = makePeerTarget(peerId);
+      if (!target) return;
+      setActiveTargets(prev => (prev.some(t => t.id === target.id) ? prev : [...prev, target]));
+      setSoloTargetId(target.id);
+    }
+  }, [activeTargets, layout, makePeerTarget]);
+
+  // Open/focus a peer when clicked from the left device sidebar.
+  useEffect(() => {
+    if (!pickRequest?.deviceId || !status) return;
+    const target = makePeerTarget(pickRequest.deviceId);
+    if (!target) return;
+    setActiveTargets(prev => (prev.some(t => t.id === target.id) ? prev : [...prev, target]));
+    setSoloTargetId(target.id);
+  }, [pickRequest, status, makePeerTarget]);
+
+  // Ensure soloTargetId always points to an open pane when in single mode.
+  useEffect(() => {
+    if (activeTargets.length === 0) {
+      if (soloTargetId !== null) setSoloTargetId(null);
+      return;
+    }
+    if (!soloTargetId || !activeTargets.some(t => t.id === soloTargetId)) {
+      setSoloTargetId(activeTargets[0].id);
+    }
+  }, [activeTargets, soloTargetId]);
 
   const openManual = () => {
     const ip = manualIp.trim();
@@ -108,65 +130,152 @@ export function RemoteWorkbench({ devices, onToggleSpeakerMute }: RemoteWorkbenc
         linkClass: isDirect ? 'direct_cable' : 'wired_lan',
       }];
     });
+    setSoloTargetId(id);
+    setManualIp('');
+    setManualName('');
+    setShowManualForm(false);
+  };
+
+  const closeTarget = (id: string) => {
+    setActiveTargets(prev => {
+      const next = prev.filter(t => t.id !== id);
+      if (soloTargetId === id) {
+        setSoloTargetId(next[0]?.id ?? null);
+      }
+      return next;
+    });
+  };
+
+  const toggleSoloPane = (id: string) => {
+    if (layout === 'single' && soloTargetId === id) {
+      setLayout('split-h');
+    } else {
+      setSoloTargetId(id);
+      setLayout('single');
+    }
   };
 
   const localHost = status?.localHost;
-  const pairedMacs = (status?.peers ?? []).filter(p => p.os === 'macos');
+  const visibleCount = layout === 'single' ? Math.min(1, activeTargets.length) : activeTargets.length;
+  const manualOnlyTargets = activeTargets.filter(t => !status?.peers.some(p => p.device === t.id));
 
   return (
     <div className="tl-workbench">
       <header className="tl-workbench__head">
         <div className="tl-workbench__brand">
           <span className="tl-workbench__logo">TREE LINK</span>
-          <span className="tl-workbench__sub">多机实时桌面掌控工作台（支持双 Mac 并排操控 · 保留文件互传 / 剪贴板 / 音频）</span>
+          <span className="tl-workbench__sub">
+            {visibleCount === 0
+              ? '点选任意一台开始单机控屏，或同时点选多台并排控屏'
+              : layout === 'single'
+                ? `单机专注控屏（已连接 ${activeTargets.length} 台，可随时切换单台或多台同屏）`
+                : `多机同屏控屏（当前同时控制 ${activeTargets.length} 台）`}
+          </span>
         </div>
         <div className="tl-workbench__actions">
-          {pairedMacs.length > 0 && (
-            <Button size="sm" variant="accent" onClick={openAllMacs}>
-              一键打开全部 Mac ({pairedMacs.length})
+          <div className="tl-seg" role="group" aria-label="控屏模式">
+            <Button
+              size="sm"
+              variant={layout === 'single' ? 'accent' : 'ghost'}
+              onClick={() => {
+                setLayout('single');
+                if (!soloTargetId && activeTargets[0]) setSoloTargetId(activeTargets[0].id);
+              }}
+            >
+              单机控屏
             </Button>
-          )}
-          <div className="tl-seg" role="group" aria-label="分屏布局">
-            <Button size="sm" variant={layout === 'split-h' ? 'accent' : 'ghost'} onClick={() => setLayout('split-h')}>左右分屏</Button>
-            <Button size="sm" variant={layout === 'split-v' ? 'accent' : 'ghost'} onClick={() => setLayout('split-v')}>上下分屏</Button>
-            <Button size="sm" variant={layout === 'single' ? 'accent' : 'ghost'} onClick={() => setLayout('single')}>单屏聚焦</Button>
+            <Button
+              size="sm"
+              variant={layout === 'split-h' ? 'accent' : 'ghost'}
+              onClick={() => setLayout('split-h')}
+            >
+              多机左右同屏
+            </Button>
+            <Button
+              size="sm"
+              variant={layout === 'split-v' ? 'accent' : 'ghost'}
+              onClick={() => setLayout('split-v')}
+            >
+              多机上下同屏
+            </Button>
           </div>
-          <Button size="sm" variant="ghost" onClick={() => { void refresh(); }}>刷新设备</Button>
+          <Button
+            size="sm"
+            variant={showManualForm ? 'accent' : 'ghost'}
+            onClick={() => setShowManualForm(v => !v)}
+          >
+            + 手动连 IP
+          </Button>
+          <Button size="sm" variant="ghost" onClick={() => { void refresh(); }}>刷新</Button>
         </div>
       </header>
 
       <div className="tl-workbench__strip">
         <div className="tl-strip__group">
-          <span className="tl-strip__label">已配对设备：</span>
+          <span className="tl-strip__label">
+            {layout === 'single' ? '点击切换要控制的电脑：' : '独立勾选要同屏控制的电脑：'}
+          </span>
           {loading && !status && <span className="tl-meta">正在读取…</span>}
-          {status && status.peers.length === 0 && (
-            <span className="tl-meta">暂无已配对设备，请先在左侧「+ 添加设备」完成配对，或在右侧直接输入 IP 连接。</span>
+          {status && status.peers.length === 0 && manualOnlyTargets.length === 0 && (
+            <span className="tl-meta">暂无已配对设备，可在左侧「+ 添加设备」配对，或点右上角「+ 手动连 IP」直接输入目标 IP。</span>
           )}
           {status?.peers.map((peer) => {
             const best = pickBestInterface(peer.rankedIps);
             const opened = activeTargets.some(t => t.id === peer.device);
+            const isCurrent = layout === 'single' ? soloTargetId === peer.device && opened : opened;
             return (
-              <Button
-                key={peer.device}
-                size="sm"
-                variant={opened ? 'accent' : 'ghost'}
-                disabled={!best}
-                onClick={() => openPeer(peer.device)}
-              >
-                {peer.name}
-                {best ? ` · ${linkClassLabel(best.linkClass)} (${best.ip})` : ' · 暂无 IP'}
-              </Button>
+              <div key={peer.device} className="tl-peer-chip">
+                <Button
+                  size="sm"
+                  variant={isCurrent ? 'accent' : 'ghost'}
+                  disabled={!best}
+                  title={
+                    !best
+                      ? '该设备当前没有可用 IP'
+                      : layout === 'single'
+                        ? `切换到单机控制 ${peer.name}`
+                        : opened
+                          ? `从同屏视图移除 ${peer.name}`
+                          : `将 ${peer.name} 加入控屏`
+                  }
+                  onClick={() => handlePeerClick(peer.device)}
+                >
+                  {isCurrent ? '● ' : opened ? '○ ' : '+ '}
+                  {peer.name}
+                  {best ? ` · ${linkClassLabel(best.linkClass)} (${best.ip})` : ' · 暂无 IP'}
+                </Button>
+              </div>
+            );
+          })}
+          {manualOnlyTargets.map((target) => {
+            const isCurrent = layout === 'single' ? soloTargetId === target.id : true;
+            return (
+              <div key={target.id} className="tl-peer-chip">
+                <Button
+                  size="sm"
+                  variant={isCurrent ? 'accent' : 'ghost'}
+                  onClick={() => {
+                    if (layout === 'single') setSoloTargetId(target.id);
+                    else closeTarget(target.id);
+                  }}
+                >
+                  {isCurrent ? '● ' : '○ '}
+                  {target.name} ({target.ip})
+                </Button>
+              </div>
             );
           })}
         </div>
 
-        <div className="tl-strip__manual">
-          <Input value={manualName} onChange={setManualName} placeholder="备注名 (如 MacBook)" />
-          <Input value={manualIp} onChange={setManualIp} placeholder="直连/局域网 IP (如 169.254.x.x)" />
-          <Input value={manualPort} onChange={setManualPort} placeholder="47474" />
-          <Input value={manualToken} onChange={setManualToken} placeholder="令牌(同组可留空)" />
-          <Button size="sm" variant="accent" onClick={openManual} disabled={!manualIp.trim()}>IP 立即控屏</Button>
-        </div>
+        {(showManualForm || (status && status.peers.length === 0 && activeTargets.length === 0)) && (
+          <div className="tl-strip__manual">
+            <Input value={manualName} onChange={setManualName} placeholder="备注名 (如 Mac-1)" />
+            <Input value={manualIp} onChange={setManualIp} placeholder="直连/局域网 IP (如 192.168.50.67)" />
+            <Input value={manualPort} onChange={setManualPort} placeholder="47474" />
+            <Input value={manualToken} onChange={setManualToken} placeholder="令牌(同组可留空)" />
+            <Button size="sm" variant="accent" onClick={openManual} disabled={!manualIp.trim()}>连接此台电脑</Button>
+          </div>
+        )}
       </div>
 
       {localHost?.hostCaptureSupported && !localHost.permissions.screenRecording && (
@@ -180,9 +289,9 @@ export function RemoteWorkbench({ devices, onToggleSpeakerMute }: RemoteWorkbenc
 
       {activeTargets.length === 0 ? (
         <div className="tl-workbench__empty">
-          <h3>在一个 Windows 显示器上同时掌控你的两台 Mac</h3>
+          <h3>自由控制 1 台，或同时并排控制多台电脑</h3>
           <p>
-            点击上方已配对的 Mac 按钮，或直接输入局域网 / 网线・雷电直连 IP（自动优先 <code>169.254.x.x</code> 直连与有线 LAN）即可实时开启硬件加速 60fps 桌面画面。
+            点上方任意一台已配对电脑即可单独操控；再点第二台即可并排同时控制两台，随时可一键切换「单机控屏」或「多机同屏」（完整保留文件互传、剪贴板与低延迟音频）。
           </p>
           {status && status.localInterfaces.length > 0 && (
             <div className="tl-local-info">
@@ -208,16 +317,21 @@ export function RemoteWorkbench({ devices, onToggleSpeakerMute }: RemoteWorkbenc
           )}
         </div>
       ) : (
-        <div className="tl-grid" data-layout={layout} data-count={activeTargets.length}>
+        <div className="tl-grid" data-layout={layout} data-count={visibleCount}>
           {activeTargets.map((target) => {
             const dev = target.deviceId ? devices.find(d => d.id === target.deviceId) : undefined;
+            const hidden = layout === 'single' && soloTargetId !== null && target.id !== soloTargetId;
             return (
               <RemotePane
                 key={target.id}
                 target={target}
+                hidden={hidden}
+                canSoloToggle={activeTargets.length > 1}
+                isSolo={layout === 'single' && target.id === soloTargetId}
+                onToggleSolo={() => toggleSoloPane(target.id)}
                 speakerMuted={dev?.speaker.muted}
                 onToggleAudioMute={dev ? () => onToggleSpeakerMute(dev.id) : undefined}
-                onClose={() => setActiveTargets(prev => prev.filter(t => t.id !== target.id))}
+                onClose={() => closeTarget(target.id)}
               />
             );
           })}

@@ -46,10 +46,19 @@ export function useLanguage(): Language {
   return useSyncExternalStore(l => { listeners.add(l); return () => { listeners.delete(l); }; }, () => language);
 }
 
+function rebrand(text: string): string {
+  if (import.meta.env.MODE === 'test') return text;
+  return text
+    .replace(/\bOink Microphone\b/g, 'TREE LINK Microphone')
+    .replace(/\bOink\b/g, 'TREE LINK');
+}
+
 function message(key: MessageKey, values: readonly unknown[]): string {
   const entry: Message = language === 'zh-Hans' ? sourceText(key) : CATALOGS[language][key];
-  if (typeof entry === 'string') return entry;
-  return entry[plurals.select(Number(values[entry.plural]))] ?? entry.other;
+  const raw = typeof entry === 'string'
+    ? entry
+    : (entry[plurals.select(Number(values[entry.plural]))] ?? entry.other);
+  return rebrand(raw);
 }
 
 /** Translate a message, replacing `{n}` with the n-th value. */

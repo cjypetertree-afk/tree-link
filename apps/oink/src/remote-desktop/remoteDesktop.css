@@ -66,6 +66,11 @@
   gap: 6px;
 }
 
+.tl-peer-chip {
+  display: inline-flex;
+  align-items: center;
+}
+
 .tl-strip__label {
   font-size: 12px;
   font-weight: 600;
@@ -176,6 +181,10 @@
   border: 1px solid color-mix(in srgb, currentColor 14%, transparent);
   background: #0d1016;
   color: #f3f6fb;
+}
+
+.tl-pane[data-hidden] {
+  display: none;
 }
 
 .tl-pane[data-focused] {

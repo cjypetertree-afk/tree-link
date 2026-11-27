@@ -1,8 +1,8 @@
 {
   "en": {
-    "about": "About Oink",
-    "open": "Open Oink",
-    "quit": "Quit Oink",
+    "about": "About TREE LINK",
+    "open": "Open TREE LINK",
+    "quit": "Quit TREE LINK",
     "edit": "Edit",
     "undo": "Undo",
     "redo": "Redo",
@@ -15,9 +15,9 @@
     "close_window": "Close Window"
   },
   "zh-Hans": {
-    "about": "关于 Oink",
-    "open": "打开 Oink",
-    "quit": "退出 Oink",
+    "about": "关于 TREE LINK",
+    "open": "打开 TREE LINK",
+    "quit": "退出 TREE LINK",
     "edit": "编辑",
     "undo": "撤销",
     "redo": "重做",
@@ -30,9 +30,9 @@
     "close_window": "关闭窗口"
   },
   "ja": {
-    "about": "Oink について",
-    "open": "Oink を開く",
-    "quit": "Oink を終了",
+    "about": "TREE LINK について",
+    "open": "TREE LINK を開く",
+    "quit": "TREE LINK を終了",
     "edit": "編集",
     "undo": "取り消す",
     "redo": "やり直す",
@@ -45,9 +45,9 @@
     "close_window": "ウインドウを閉じる"
   },
   "ko": {
-    "about": "Oink에 관하여",
-    "open": "Oink 열기",
-    "quit": "Oink 종료",
+    "about": "TREE LINK에 관하여",
+    "open": "TREE LINK 열기",
+    "quit": "TREE LINK 종료",
     "edit": "편집",
     "undo": "실행 취소",
     "redo": "실행 복귀",

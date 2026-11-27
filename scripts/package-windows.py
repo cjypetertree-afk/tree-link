@@ -460,8 +460,8 @@ def main() -> None:
     values = {
         "UpdateNotesFile": str(notes_file),
         "LicenseRtf": str(license_rtf),
-        "DialogBmp": str(ROOT / "packaging/windows/installer-background.bmp"),
-        "BannerBmp": str(ROOT / "packaging/windows/installer-banner.bmp"),
+        "DialogBmp": str(ROOT / "packaging/treelink/installer-background.bmp"),
+        "BannerBmp": str(ROOT / "packaging/treelink/installer-banner.bmp"),
         "ProductName": "TREE LINK",
         "Manufacturer": "TREE LINK (derived from Oink)",
         "ProductVersion": msi_version,

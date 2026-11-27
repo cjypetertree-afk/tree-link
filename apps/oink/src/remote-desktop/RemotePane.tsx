@@ -27,6 +27,10 @@ export interface RemoteTarget {
 
 interface RemotePaneProps {
   target: RemoteTarget;
+  hidden?: boolean;
+  canSoloToggle?: boolean;
+  isSolo?: boolean;
+  onToggleSolo?: () => void;
   speakerMuted?: boolean;
   onToggleAudioMute?: () => void;
   onClose: () => void;
@@ -44,7 +48,16 @@ function codecStringFor(codec: VideoCodec): string {
   return codec === 'hevc' ? 'hvc1.1.6.L120.B0' : 'avc1.640028';
 }
 
-export function RemotePane({ target, speakerMuted, onToggleAudioMute, onClose }: RemotePaneProps) {
+export function RemotePane({
+  target,
+  hidden = false,
+  canSoloToggle = false,
+  isSolo = false,
+  onToggleSolo,
+  speakerMuted,
+  onToggleAudioMute,
+  onClose,
+}: RemotePaneProps) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const stageRef = useRef<HTMLDivElement | null>(null);
   const wsRef = useRef<WebSocket | null>(null);
@@ -391,7 +404,13 @@ export function RemotePane({ target, speakerMuted, onToggleAudioMute, onClose }:
   };
 
   return (
-    <section className="tl-pane" data-focused={focused ? '' : undefined} ref={stageRef}>
+    <section
+      className="tl-pane"
+      data-focused={focused ? '' : undefined}
+      data-hidden={hidden ? '' : undefined}
+      aria-hidden={hidden || undefined}
+      ref={stageRef}
+    >
       <header className="tl-pane__bar">
         <div className="tl-pane__title">
           <span className="tl-dot" data-state={status} />
@@ -483,6 +502,16 @@ export function RemotePane({ target, speakerMuted, onToggleAudioMute, onClose }:
           {onToggleAudioMute && (
             <Button size="sm" variant="ghost" title="静音 / 取消静音此设备音频" onClick={onToggleAudioMute}>
               {speakerMuted ? '音频已静音' : '音频开启'}
+            </Button>
+          )}
+          {canSoloToggle && onToggleSolo && (
+            <Button
+              size="sm"
+              variant={isSolo ? 'accent' : 'ghost'}
+              title={isSolo ? '返回同时控制多台电脑' : '只显示并专注控制这一台电脑'}
+              onClick={onToggleSolo}
+            >
+              {isSolo ? '返回多机同屏' : '单机专注'}
             </Button>
           )}
           <Button size="sm" variant="ghost" title="全屏查看此 Mac" onClick={toggleFullscreen}>全屏</Button>

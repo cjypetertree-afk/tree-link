@@ -25,7 +25,7 @@ export type OnboardingStep = 'welcome' | 'perms' | 'telemetry' | 'connect';
 
 const EXIT_MS: Record<OnboardingStep, number> = { welcome: FLY_MS, perms: 260, telemetry: 260, connect: 260 };
 
-const PRIVACY_URL = 'https://github.com/oinkvm/oink/blob/main/PRIVACY.md';
+const PRIVACY_URL = 'https://github.com/cjypetertree-afk/tree-link/blob/main/PRIVACY.md';
 
 export interface OnboardingProps {
   platform: Platform;

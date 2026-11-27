@@ -63,7 +63,7 @@ it.each(['en', 'zh-Hans'] as const)('shows only the crash-report row and opens p
   expect(document.body.textContent).toContain(language === 'en' ? 'Sentry (EU data centre)' : 'Sentry（欧盟数据中心）');
   expect((screen.getByRole('switch') as HTMLInputElement).checked).toBe(false);
   fireEvent.click(privacy);
-  expect(open).toHaveBeenCalledWith('https://github.com/oinkvm/oink/blob/main/PRIVACY.md');
+  expect(open).toHaveBeenCalledWith('https://github.com/cjypetertree-afk/tree-link/blob/main/PRIVACY.md');
   expect(props.preferences.chooseReport).not.toHaveBeenCalled();
   fireEvent.click(screen.getByRole('button', { name: language === 'en' ? 'Next' : '下一步' }));
   await waitFor(() => expect(props.preferences.chooseReport).toHaveBeenCalledWith(false));

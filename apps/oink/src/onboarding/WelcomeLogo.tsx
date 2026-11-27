@@ -1,74 +1,32 @@
-import { useEffect, useRef } from 'react';
-import type { CSSProperties, RefObject } from 'react';
-import { speed } from 'oink-ui';
-import { FLY_MS, PIVOT, createRope, pose, smooth, tailRest } from './flight';
-
-const TAIL_POINTS = 26;
-
-const POINTER = 'M9 22.5V39L33.5 29.5Q23.5 15.5 9 6Z';
-const TAIL = 'M20.5 32C20.5 46 31 54.5 45 54.5A9.5 9.5 0 1 0 36.3 41.2';
-
-const STROKES: Array<{ d: string; dot?: boolean }> = [
-  { d: 'M32 5.5a26.5 26.5 0 1 0 0 53a26.5 26.5 0 1 0 0 -53' },
-  { d: 'M79.5 25.5V58.5' },
-  { d: 'M79.5 7h0', dot: true },
-  { d: 'M102.5 25.5V58.5' },
-  { d: 'M102.5 58.5V38.5a13 13 0 0 1 26 0V58.5' },
-  { d: 'M151.5 5.5V58.5' },
-  { d: 'M172 25.5L151.5 44' },
-  { d: 'M159.5 37.5L174.5 58.5' },
-];
-
-// Animate the pointer rigidly and the attached tail as a soft rope.
-function useFly(leaving: boolean, flyer: RefObject<SVGGElement | null>, ptr: RefObject<SVGGElement | null>, tail: RefObject<SVGPathElement | null>) {
-  useEffect(() => {
-    if (!leaving) return;
-    const s = speed();
-    const f = flyer.current, g = ptr.current, t = tail.current;
-    if (!f || !g || !t || s <= 0) return;
-    const rope = createRope(tailRest(TAIL_POINTS));
-    t.style.strokeDasharray = 'none';
-    t.removeAttribute('pathLength');
-    const start = performance.now();
-    let raf = 0;
-    const frame = (now: number) => {
-      const ms = Math.min(FLY_MS, (now - start) / s);
-      rope.advance(ms);
-      const ps = pose(ms / FLY_MS);
-      g.setAttribute('transform', `translate(${ps.x.toFixed(2)} ${ps.y.toFixed(2)}) rotate(${ps.rot.toFixed(2)} ${PIVOT.x} ${PIVOT.y})`);
-      t.setAttribute('d', smooth(rope.points));
-      const tt = ms / FLY_MS;
-      f.style.opacity = String(tt < 0.8 ? 1 : 1 - (tt - 0.8) / 0.2);
-      if (ms < FLY_MS) raf = requestAnimationFrame(frame);
-    };
-    raf = requestAnimationFrame(frame);
-    return () => cancelAnimationFrame(raf);
-  }, [leaving]);
-}
-
 export function WelcomeLogo({ leaving }: { leaving: boolean }) {
-  const flyer = useRef<SVGGElement>(null);
-  const ptr = useRef<SVGGElement>(null);
-  const tail = useRef<SVGPathElement>(null);
-  useFly(leaving, flyer, ptr, tail);
   return (
-    <div className="ob-logo" data-leaving={leaving ? '' : undefined} role="img" aria-label="Oink">
-      <svg className="ob-logo__mark" viewBox="2 0 60 68" aria-hidden>
-        <g transform="translate(0 1.5)" ref={flyer}>
-          <path className="ob-logo__tail brand-tail" d={TAIL} pathLength={1} ref={tail} />
-          <g className="ob-logo__ptr" ref={ptr}>
-            <path className="ob-logo__ptr-path" d={POINTER} pathLength={1} />
-          </g>
-        </g>
+    <div className="ob-logo" data-leaving={leaving ? '' : undefined} role="img" aria-label="TREE LINK">
+      <svg className="ob-logo__mark" viewBox="0 0 100 100" aria-hidden>
+        <ellipse cx="50" cy="86" rx="22" ry="4.5" fill="#07110D" opacity="0.28" />
+        <path d="M42.5 59 C42.5 70 39.5 77.5 36.5 82.5 C35.5 84.5 37.5 86 40.5 86 H59.5 C62.5 86 64.5 84.5 63.5 82.5 C60.5 77.5 57.5 70 57.5 59 Z" fill="#C47E4A" />
+        <path d="M45.5 61.5 C45.5 70 43.2 76.8 40.8 82" fill="none" stroke="#E2A474" strokeWidth="2.8" strokeLinecap="round" />
+        <circle cx="31" cy="52" r="17.5" fill="#15803D" />
+        <circle cx="69" cy="52" r="17.5" fill="#15803D" />
+        <circle cx="50" cy="54" r="21.5" fill="#15803D" />
+        <circle cx="31.5" cy="46.5" r="17" fill="#22C55E" />
+        <circle cx="68.5" cy="46.5" r="17" fill="#22C55E" />
+        <circle cx="50" cy="34.5" r="20.5" fill="#22C55E" />
+        <circle cx="50" cy="48.5" r="20.5" fill="#22C55E" />
+        <circle cx="43.5" cy="27" r="11" fill="#86EFAC" opacity="0.55" />
+        <path d="M50 15.5 Q51.5 7.5 59.5 5.5 Q58 13.5 50 15.5 Z" fill="#86EFAC" />
+        <path d="M50 15.5 Q47.5 8.5 40.5 7.5 Q42.5 14 50 15.5 Z" fill="#4ADE80" />
+        <circle cx="40.5" cy="48.5" r="3.6" fill="#0F241B" />
+        <circle cx="39.2" cy="47.2" r="1.25" fill="#FFFFFF" />
+        <circle cx="59.5" cy="48.5" r="3.6" fill="#0F241B" />
+        <circle cx="58.2" cy="47.2" r="1.25" fill="#FFFFFF" />
+        <ellipse cx="33" cy="53.5" rx="3.7" ry="2.1" fill="#FDA4AF" opacity="0.92" />
+        <ellipse cx="67" cy="53.5" rx="3.7" ry="2.1" fill="#FDA4AF" opacity="0.92" />
+        <path d="M46.2 52.8 Q50 56.8 53.8 52.8" fill="none" stroke="#0F241B" strokeWidth="2.5" strokeLinecap="round" />
+        <circle cx="23.5" cy="26.5" r="2.8" fill="#38BDF8" />
+        <circle cx="77" cy="29.5" r="2.4" fill="#FDE047" />
       </svg>
-      <svg className="ob-logo__word" viewBox="-6 -6 193 77" aria-hidden>
-        {STROKES.map((s, i) => (
-          <path
-            key={i} d={s.d} pathLength={1}
-            className={s.dot ? 'ob-logo__dot' : 'ob-logo__stroke'}
-            style={{ '--i': i } as CSSProperties}
-          />
-        ))}
+      <svg className="ob-logo__word" viewBox="0 0 260 64" aria-hidden>
+        <text x="6" y="46" fill="currentColor" fontSize="38" fontWeight="800" letterSpacing="3" fontFamily="-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif">TREE LINK</text>
       </svg>
     </div>
   );

@@ -272,7 +272,7 @@ fn builder(app: &AppHandle, view: View) -> WebviewWindowBuilder<'_, tauri::Wry, 
     // App URLs preserve the query in both devUrl and the embedded asset protocol.
     let path = format!("index.html?view={}", view.label());
     let builder = WebviewWindowBuilder::new(app, view.label(), WebviewUrl::App(path.into()))
-        .title("Oink")
+        .title("TREE LINK")
         .initialization_script(crate::app::ERROR_REPORTER)
         .initialization_script(crate::system_locale::initialization_script());
     #[cfg(windows)]

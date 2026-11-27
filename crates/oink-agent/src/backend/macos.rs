@@ -27,7 +27,7 @@ fn status_icon(look: crate::tray::TrayLook) -> Retained<NSImage> {
         image.addRepresentation(&rep);
     }
     image.setTemplate(true);
-    image.setAccessibilityDescription(Some(&NSString::from_str("Oink")));
+    image.setAccessibilityDescription(Some(&NSString::from_str("TREE LINK")));
     image
 }
 

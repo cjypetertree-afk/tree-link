@@ -60,8 +60,8 @@ fn label(language: UiLanguage, id: &str) -> &'static str {
         "pause" => ["Pause sharing", "暂停共享", "共有を一時停止", "공유 일시 중지"],
         "resume" => ["Resume sharing", "恢复共享", "共有を再開", "공유 재개"],
         "show" => ["Show main window", "显示主界面", "メインウインドウを表示", "주 창 표시"],
-        "about" => ["About Oink", "关于 Oink", "Oink について", "Oink 정보"],
-        "quit" => ["Quit Oink", "退出 Oink", "Oink を終了", "Oink 종료"],
+        "about" => ["About TREE LINK", "关于 TREE LINK", "TREE LINK について", "TREE LINK 정보"],
+        "quit" => ["Quit TREE LINK", "退出 TREE LINK", "TREE LINK を終了", "TREE LINK 종료"],
         _ => ["", "", "", ""],
     };
     text[match language {

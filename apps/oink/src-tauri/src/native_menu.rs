@@ -69,7 +69,7 @@ pub fn install(app: &AppHandle, language: UiLanguage) -> tauri::Result<()> {
     let quit = MenuItem::with_id(app, "shell-quit", &labels.quit, true, Some("CmdOrCtrl+Q"))?;
     let product = Submenu::with_items(
         app,
-        "Oink",
+        "TREE LINK",
         true,
         &[&about, &open, &PredefinedMenuItem::separator(app)?, &quit],
     )?;
@@ -120,10 +120,10 @@ mod tests {
 
     #[test]
     fn about_menu_uses_the_product_name_in_every_language() {
-        assert_eq!(super::labels(UiLanguage::English).about, "About Oink");
-        assert_eq!(super::labels(UiLanguage::SimplifiedChinese).about, "关于 Oink");
-        assert_eq!(super::labels(UiLanguage::Japanese).about, "Oink について");
-        assert_eq!(super::labels(UiLanguage::Korean).about, "Oink에 관하여");
+        assert_eq!(super::labels(UiLanguage::English).about, "About TREE LINK");
+        assert_eq!(super::labels(UiLanguage::SimplifiedChinese).about, "关于 TREE LINK");
+        assert_eq!(super::labels(UiLanguage::Japanese).about, "TREE LINK について");
+        assert_eq!(super::labels(UiLanguage::Korean).about, "TREE LINK에 관하여");
     }
 
     #[test]

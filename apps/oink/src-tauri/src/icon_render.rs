@@ -1,4 +1,4 @@
-//! B2 artwork, with only the tile, cursor and tail paints changed.
+//! TREE LINK Q-style chibi tree runtime icon renderer (macOS Dock, Windows Taskbar & Tray).
 use oink_agent::config::{ThemeAccent, ThemeMode};
 use resvg::{tiny_skia, usvg};
 
@@ -32,18 +32,14 @@ pub(crate) fn render(artwork: Artwork, appearance: Appearance, size: u32) -> Res
         #[cfg(any(windows, test))]
         Artwork::Windows => include_str!("../icons/appicon-windows.svg"),
     };
-    let [r, g, b] = appearance.accent;
-    let svg = source
-        .replace("#1B1E28", if appearance.dark { "#000000" } else { "#FFFFFF" })
-        .replace(
-            "#FFFFFF\" stroke=\"#FFFFFF",
-            if appearance.dark {
-                "#FFFFFF\" stroke=\"#FFFFFF"
-            } else {
-                "#000000\" stroke=\"#000000"
-            },
-        )
-        .replace("#2E7BFF", &format!("#{r:02X}{g:02X}{b:02X}"));
+    // Keep the Q-style chibi tree lush green in both light and dark modes while adapting the tile softly.
+    let svg = if appearance.dark {
+        source.to_owned()
+    } else {
+        source
+            .replace("#152C22", "#ECFCF2")
+            .replace("#0D1C16", "#D2F7E2")
+    };
     render_svg(&svg, size)
 }
 
@@ -90,7 +86,7 @@ mod tests {
             },
             Appearance {
                 dark: false,
-                accent: [255, 107, 142],
+                accent: [34, 197, 94],
             },
             32,
         )
@@ -99,7 +95,7 @@ mod tests {
             TrayLook::default(),
             Appearance {
                 dark: false,
-                accent: [255, 107, 142],
+                accent: [34, 197, 94],
             },
             32,
         )
@@ -112,7 +108,7 @@ mod tests {
             },
             Appearance {
                 dark: false,
-                accent: [255, 107, 142],
+                accent: [34, 197, 94],
             },
             32,
         )
@@ -121,28 +117,33 @@ mod tests {
     }
 
     #[test]
-    fn recolours_only_the_three_paints_in_both_platform_artworks() {
+    fn renders_chibi_tree_in_both_appearances_and_platforms() {
         for artwork in [Artwork::Mac, Artwork::Windows] {
-            for dark in [false, true] {
-                for accent in [[0xE7, 0x36, 0x81], [0x12, 0xAB, 0xCD]] {
-                    let image = render(artwork, Appearance { dark, accent }, 1024).unwrap();
-                    let (tail, cursor) = match artwork {
-                        // Interior points in the tail's horizontal curl and cursor.
-                        Artwork::Mac => ((632, 734), (330, 430)),
-                        Artwork::Windows => ((684, 829), (250, 390)),
-                    };
-                    let pixel = |(x, y)| {
-                        let p = image.pixel(x, y).unwrap().demultiply();
-                        [p.red(), p.green(), p.blue(), p.alpha()]
-                    };
-                    assert_eq!(pixel(tail), [accent[0], accent[1], accent[2], 255]);
-                    let bg = if dark { 0 } else { 255 };
-                    assert_eq!(pixel((512, 180)), [bg, bg, bg, 255]);
-                    let fg = 255 - bg;
-                    assert_eq!(pixel(cursor), [fg, fg, fg, 255]);
-                    assert_eq!(pixel((0, 0))[3], 0);
-                }
-            }
+            let dark = render(
+                artwork,
+                Appearance {
+                    dark: true,
+                    accent: [34, 197, 94],
+                },
+                256,
+            )
+            .unwrap();
+            let light = render(
+                artwork,
+                Appearance {
+                    dark: false,
+                    accent: [34, 197, 94],
+                },
+                256,
+            )
+            .unwrap();
+            assert_eq!(dark.pixel(0, 0).unwrap().alpha(), 0);
+            assert_eq!(light.pixel(0, 0).unwrap().alpha(), 0);
+            // Center canopy pixel is opaque emerald green in both modes.
+            let center = dark.pixel(128, 108).unwrap().demultiply();
+            assert_eq!(center.alpha(), 255);
+            assert!(center.green() > center.red());
+            assert_ne!(dark.data(), light.data());
         }
     }
 
@@ -173,26 +174,6 @@ mod tests {
                 a.pixels().iter().map(|p| p.alpha()).collect::<Vec<_>>(),
                 b.pixels().iter().map(|p| p.alpha()).collect::<Vec<_>>()
             );
-        }
-    }
-
-    #[test]
-    fn fresh_native_icons_use_pink_in_both_appearances() {
-        for dark in [false, true] {
-            let appearance = Appearance::resolve(ThemeMode::System, &ThemeAccent::default(), dark);
-            assert_eq!(appearance.accent, [255, 107, 142]);
-            for artwork in [Artwork::Mac, Artwork::Windows] {
-                let image = render(artwork, appearance, 1024).unwrap();
-                let (x, y) = match artwork {
-                    Artwork::Mac => (632, 734),
-                    Artwork::Windows => (684, 829),
-                };
-                let tail = image.pixel(x, y).unwrap().demultiply();
-                assert_eq!(
-                    [tail.red(), tail.green(), tail.blue(), tail.alpha()],
-                    [255, 107, 142, 255]
-                );
-            }
         }
     }
 

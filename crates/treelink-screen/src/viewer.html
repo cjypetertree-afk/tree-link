@@ -3,6 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Crect width='100' height='100' rx='22' fill='%2313261E'/%3E%3Cpath d='M43 60 C43 70 40 77 37 82 C36 84 38 85 41 85 H59 C62 85 64 84 63 82 C60 77 57 70 57 60 Z' fill='%23C47E4A'/%3E%3Ccircle cx='32' cy='47' r='17' fill='%2322C55E'/%3E%3Ccircle cx='68' cy='47' r='17' fill='%2322C55E'/%3E%3Ccircle cx='50' cy='35' r='20' fill='%2322C55E'/%3E%3Ccircle cx='50' cy='49' r='20' fill='%2322C55E'/%3E%3Cpath d='M50 16 Q52 8 60 6 Q58 14 50 16 Z' fill='%2386EFAC'/%3E%3Ccircle cx='40' cy='49' r='3.6' fill='%230F241B'/%3E%3Ccircle cx='60' cy='49' r='3.6' fill='%230F241B'/%3E%3Cpath d='M46 53 Q50 57 54 53' fill='none' stroke='%230F241B' stroke-width='2.5' stroke-linecap='round'/%3E%3C/svg%3E" />
   <title>TREE LINK — 多机实时桌面掌控台</title>
   <style>
     :root {
@@ -123,6 +124,22 @@
     .pane.drop-hover {
       border-color: var(--accent-2);
       box-shadow: 0 0 0 3px rgba(56, 189, 248, 0.45);
+    }
+    .pane.hidden-solo {
+      display: none;
+    }
+    .host-tabs {
+      display: flex;
+      align-items: center;
+      flex-wrap: wrap;
+      gap: 6px;
+      padding: 6px 12px;
+      background: #0f1520;
+      border-bottom: 1px solid var(--border);
+    }
+    .host-tabs-label {
+      font-size: 12px;
+      color: var(--muted);
     }
     .pane-bar {
       display: flex;
@@ -260,6 +277,20 @@
   <div class="app">
     <header class="topbar">
       <div class="brand">
+        <svg width="24" height="24" viewBox="0 0 100 100" aria-hidden="true" style="flex:none">
+          <rect width="100" height="100" rx="22" fill="#13261E"/>
+          <path d="M43 60 C43 70 40 77 37 82 C36 84 38 85 41 85 H59 C62 85 64 84 63 82 C60 77 57 70 57 60 Z" fill="#C47E4A"/>
+          <circle cx="32" cy="47" r="17" fill="#22C55E"/>
+          <circle cx="68" cy="47" r="17" fill="#22C55E"/>
+          <circle cx="50" cy="35" r="20" fill="#22C55E"/>
+          <circle cx="50" cy="49" r="20" fill="#22C55E"/>
+          <path d="M50 16 Q52 8 60 6 Q58 14 50 16 Z" fill="#86EFAC"/>
+          <circle cx="40.5" cy="48.5" r="3.5" fill="#0F241B"/><circle cx="39.3" cy="47.3" r="1.2" fill="#FFF"/>
+          <circle cx="59.5" cy="48.5" r="3.5" fill="#0F241B"/><circle cx="58.3" cy="47.3" r="1.2" fill="#FFF"/>
+          <ellipse cx="33" cy="53.5" rx="3.5" ry="2" fill="#FDA4AF"/>
+          <ellipse cx="67" cy="53.5" rx="3.5" ry="2" fill="#FDA4AF"/>
+          <path d="M46.2 52.8 Q50 56.8 53.8 52.8" fill="none" stroke="#0F241B" stroke-width="2.5" stroke-linecap="round"/>
+        </svg>
         <span class="logo">TREE LINK</span>
         <span class="sub" id="contextHint">多 Mac 实时控屏 · 拖拽文件直传 · 剪贴板同步</span>
       </div>
@@ -269,11 +300,14 @@
         <input id="addHost" placeholder="添加另一台 Mac IP:端口 (如 192.168.50.88)" style="width:228px" />
         <input id="addToken" placeholder="令牌(可留空)" style="width:92px" />
         <button class="primary" id="addBtn">+ 添加一台 Mac</button>
-        <button id="btnSplitH" class="active">左右分屏</button>
-        <button id="btnSplitV">上下分屏</button>
-        <button id="btnSingle">单屏</button>
+        <button id="btnSingle">单机控屏</button>
+        <button id="btnSplitH" class="active">多机左右同屏</button>
+        <button id="btnSplitV">多机上下同屏</button>
       </div>
     </header>
+    <div class="host-tabs" id="hostTabs">
+      <span class="host-tabs-label" id="hostTabsLabel">已连接的电脑：</span>
+    </div>
     <main class="grid" id="grid" data-layout="split-h"></main>
   </div>
   <div class="toast" id="toast"></div>
@@ -367,17 +401,60 @@
     }
 
     const grid = document.getElementById('grid');
+    const hostTabs = document.getElementById('hostTabs');
+    const hostTabsLabel = document.getElementById('hostTabsLabel');
+    let currentLayout = 'split-h';
+    let soloPaneId = null;
+    let paneSeq = 0;
+    const panes = [];
+
+    function syncPaneVisibility() {
+      if (panes.length > 0 && (!soloPaneId || !panes.some(p => p.id === soloPaneId))) {
+        soloPaneId = panes[0].id;
+      }
+      grid.dataset.layout = currentLayout;
+      document.getElementById('btnSplitH').classList.toggle('active', currentLayout === 'split-h');
+      document.getElementById('btnSplitV').classList.toggle('active', currentLayout === 'split-v');
+      document.getElementById('btnSingle').classList.toggle('active', currentLayout === 'single');
+      hostTabsLabel.textContent = currentLayout === 'single'
+        ? '单机控屏（点击切换要控制的电脑）：'
+        : '多机同屏（点击可单机专注，或关闭单个窗口）：';
+
+      // Rebuild host quick-switcher pills.
+      hostTabs.querySelectorAll('.host-pill').forEach(n => n.remove());
+      for (const item of panes) {
+        const isActive = currentLayout === 'single' ? item.id === soloPaneId : true;
+        item.el.classList.toggle('hidden-solo', currentLayout === 'single' && item.id !== soloPaneId);
+        const soloBtn = item.el.querySelector('.p-solo');
+        if (soloBtn) {
+          soloBtn.style.display = panes.length > 1 ? '' : 'none';
+          soloBtn.textContent = (currentLayout === 'single' && item.id === soloPaneId) ? '返回多机同屏' : '单机专注';
+          soloBtn.classList.toggle('active', currentLayout === 'single' && item.id === soloPaneId);
+        }
+        const pill = document.createElement('button');
+        pill.className = 'host-pill' + (isActive ? ' active' : '');
+        pill.textContent = (isActive ? '● ' : '○ ') + item.getLabel();
+        pill.onclick = () => {
+          soloPaneId = item.id;
+          if (currentLayout !== 'single') {
+            currentLayout = 'single';
+          }
+          syncPaneVisibility();
+        };
+        hostTabs.appendChild(pill);
+      }
+    }
+
     function setLayout(mode) {
-      grid.dataset.layout = mode;
-      document.getElementById('btnSplitH').classList.toggle('active', mode === 'split-h');
-      document.getElementById('btnSplitV').classList.toggle('active', mode === 'split-v');
-      document.getElementById('btnSingle').classList.toggle('active', mode === 'single');
+      currentLayout = mode;
+      syncPaneVisibility();
     }
     document.getElementById('btnSplitH').onclick = () => setLayout('split-h');
     document.getElementById('btnSplitV').onclick = () => setLayout('split-v');
     document.getElementById('btnSingle').onclick = () => setLayout('single');
 
     function createPane({ name, host, token }) {
+      const paneId = `pane-${++paneSeq}`;
       const pane = document.createElement('section');
       pane.className = 'pane';
       const defaultCodec = hasWebCodecs ? 'h264' : 'jpeg';
@@ -423,6 +500,7 @@
             <button class="p-ime" title="发送 ⌃Space (切换中英文输入法)">切输入法</button>
             <button class="p-paste" title="把文字同步到 Mac 并直接粘贴 (⌘V)">同步粘贴</button>
             <button class="p-clip-pull" title="读取这台 Mac 的剪贴板">读剪贴板</button>
+            <button class="p-solo" style="display:none" title="单机专注 / 返回多机同屏">单机专注</button>
             <button class="p-full" title="全屏并锁定开发快捷键 (Ctrl+W/T/Esc)">全屏控屏</button>
             <button class="p-reconn" title="重连">重连</button>
             <button class="p-close" title="关闭">关闭</button>
@@ -643,7 +721,10 @@
             try {
               const m = JSON.parse(ev.data);
               if (m.type === 'hello') {
-                if (m.device_name) $('.p-name').textContent = name || m.device_name;
+                if (m.device_name) {
+                  $('.p-name').textContent = name || m.device_name;
+                  syncPaneVisibility();
+                }
                 if (!hasWebCodecs && m.tls_port && host === location.host) {
                   httpsUpgradeBtn.style.display = '';
                   httpsUpgradeBtn.onclick = () => {
@@ -751,7 +832,13 @@
           ws = null;
         }
         if (decoder) { try { decoder.close(); } catch {} decoder = null; }
-        if (removeEl) pane.remove();
+        if (removeEl) {
+          const idx = panes.findIndex(p => p.id === paneId);
+          if (idx >= 0) panes.splice(idx, 1);
+          if (soloPaneId === paneId) soloPaneId = panes[0]?.id ?? null;
+          pane.remove();
+          syncPaneVisibility();
+        }
       }
 
       function norm(e) {
@@ -844,6 +931,15 @@
           stage.focus();
         }
       };
+      $('.p-solo').onclick = () => {
+        if (currentLayout === 'single' && soloPaneId === paneId) {
+          currentLayout = 'split-h';
+        } else {
+          soloPaneId = paneId;
+          currentLayout = 'single';
+        }
+        syncPaneVisibility();
+      };
       $('.p-reconn').onclick = connect;
       $('.o-retry').onclick = connect;
       $('.p-close').onclick = () => disconnect(true);
@@ -913,6 +1009,9 @@
       };
 
       grid.appendChild(pane);
+      panes.push({ id: paneId, el: pane, getLabel: () => $('.p-name').textContent || host });
+      if (!soloPaneId) soloPaneId = paneId;
+      syncPaneVisibility();
       connect();
     }
 
