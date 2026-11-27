@@ -35,6 +35,7 @@ unsafe extern "C" {
     fn tl_check_screen_recording_permission() -> bool;
     fn tl_request_screen_recording_permission() -> bool;
     fn tl_check_accessibility_permission() -> bool;
+    fn tl_request_accessibility_permission() -> bool;
     fn tl_list_displays(out_buf: *mut TLDisplayInfo, max_count: usize) -> usize;
     fn tl_capture_start(
         display_id: u32,
@@ -70,6 +71,11 @@ pub fn permissions() -> PermissionSummary {
 pub fn request_screen_recording_permission() -> bool {
     // SAFETY: CoreGraphics permission prompt call takes no pointers.
     unsafe { tl_request_screen_recording_permission() }
+}
+
+pub fn request_accessibility_permission() -> bool {
+    // SAFETY: ApplicationServices accessibility prompt call takes no pointers.
+    unsafe { tl_request_accessibility_permission() }
 }
 
 pub fn list_displays() -> Vec<DisplayDescriptor> {

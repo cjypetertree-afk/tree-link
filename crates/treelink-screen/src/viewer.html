@@ -1,0 +1,761 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>TREE LINK — 多机实时桌面掌控台</title>
+  <style>
+    :root {
+      --bg: #0b0f17;
+      --surface: #131a26;
+      --surface-2: #1a2333;
+      --border: rgba(255, 255, 255, 0.11);
+      --text: #eef3fb;
+      --muted: rgba(238, 243, 251, 0.68);
+      --accent: #22c55e;
+      --accent-2: #38bdf8;
+      --warn: #f59e0b;
+      --err: #ef4444;
+    }
+    * { box-sizing: border-box; }
+    html, body {
+      margin: 0;
+      padding: 0;
+      width: 100%;
+      height: 100%;
+      background: var(--bg);
+      color: var(--text);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+      overflow: hidden;
+    }
+    .app {
+      display: flex;
+      flex-direction: column;
+      width: 100%;
+      height: 100%;
+    }
+    .topbar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      flex-wrap: wrap;
+      gap: 8px;
+      padding: 8px 12px;
+      background: var(--surface);
+      border-bottom: 1px solid var(--border);
+    }
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+    .logo {
+      font-weight: 800;
+      letter-spacing: 0.08em;
+      color: var(--accent);
+      font-size: 14px;
+    }
+    .sub {
+      font-size: 12px;
+      color: var(--muted);
+    }
+    .controls {
+      display: flex;
+      align-items: center;
+      flex-wrap: wrap;
+      gap: 6px;
+    }
+    input, select, button {
+      font: inherit;
+      font-size: 12px;
+      border-radius: 7px;
+      border: 1px solid var(--border);
+      background: var(--surface-2);
+      color: var(--text);
+      padding: 5px 9px;
+      outline: none;
+    }
+    input:focus, select:focus {
+      border-color: var(--accent);
+    }
+    button {
+      cursor: pointer;
+      transition: background 0.12s, border-color 0.12s;
+    }
+    button:hover { background: #233046; }
+    button.primary {
+      background: #16a34a;
+      border-color: #22c55e;
+      color: #fff;
+      font-weight: 600;
+    }
+    button.primary:hover { background: #15803d; }
+    button.active {
+      background: rgba(34, 197, 94, 0.22);
+      border-color: var(--accent);
+      color: #86efac;
+    }
+    .grid {
+      flex: 1;
+      min-height: 0;
+      display: grid;
+      gap: 8px;
+      padding: 8px;
+    }
+    .grid[data-layout="split-h"] { grid-template-columns: repeat(auto-fit, minmax(420px, 1fr)); }
+    .grid[data-layout="split-v"] { grid-template-columns: 1fr; grid-auto-rows: 1fr; }
+    .grid[data-layout="single"] { grid-template-columns: 1fr; }
+    .pane {
+      display: flex;
+      flex-direction: column;
+      min-width: 0;
+      min-height: 0;
+      border-radius: 10px;
+      overflow: hidden;
+      border: 1px solid var(--border);
+      background: #070a0f;
+      position: relative;
+    }
+    .pane.focused {
+      border-color: var(--accent);
+      box-shadow: 0 0 0 2px rgba(34, 197, 94, 0.28);
+    }
+    .pane.drop-hover {
+      border-color: var(--accent-2);
+      box-shadow: 0 0 0 3px rgba(56, 189, 248, 0.45);
+    }
+    .pane-bar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      flex-wrap: wrap;
+      gap: 6px;
+      padding: 6px 10px;
+      background: var(--surface);
+      border-bottom: 1px solid var(--border);
+    }
+    .pane-title {
+      display: flex;
+      align-items: center;
+      gap: 7px;
+      font-size: 12px;
+    }
+    .dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: #64748b;
+    }
+    .dot.streaming { background: var(--accent); }
+    .dot.connecting { background: var(--warn); }
+    .dot.error { background: var(--err); }
+    .meta {
+      font-size: 11px;
+      color: var(--muted);
+    }
+    .badge {
+      font-size: 11px;
+      padding: 1px 6px;
+      border-radius: 999px;
+      background: rgba(56, 189, 248, 0.18);
+      color: #7dd3fc;
+    }
+    .stage {
+      position: relative;
+      flex: 1;
+      min-height: 0;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      overflow: hidden;
+      outline: none;
+      background: #05070b;
+    }
+    canvas {
+      max-width: 100%;
+      max-height: 100%;
+      width: auto;
+      height: auto;
+      object-fit: contain;
+      display: block;
+      user-select: none;
+      cursor: crosshair;
+    }
+    .overlay {
+      position: absolute;
+      inset: 0;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      padding: 20px;
+      text-align: center;
+      background: rgba(7, 10, 15, 0.84);
+    }
+    .overlay.hidden { display: none; }
+    .overlay-msg {
+      max-width: 440px;
+      font-size: 12px;
+      color: #fca5a5;
+      line-height: 1.5;
+    }
+    .drop-banner {
+      position: absolute;
+      inset: 10px;
+      border: 2px dashed var(--accent-2);
+      border-radius: 10px;
+      background: rgba(15, 23, 42, 0.82);
+      display: none;
+      align-items: center;
+      justify-content: center;
+      font-size: 15px;
+      font-weight: 600;
+      color: #7dd3fc;
+      pointer-events: none;
+    }
+    .pane.drop-hover .drop-banner { display: flex; }
+    .toast {
+      position: fixed;
+      right: 14px;
+      bottom: 14px;
+      max-width: 420px;
+      padding: 10px 14px;
+      border-radius: 10px;
+      background: #1e293b;
+      border: 1px solid var(--border);
+      color: var(--text);
+      font-size: 12px;
+      box-shadow: 0 10px 30px rgba(0,0,0,0.45);
+      opacity: 0;
+      transform: translateY(8px);
+      transition: opacity 0.16s, transform 0.16s;
+      pointer-events: none;
+      z-index: 99;
+    }
+    .toast.show { opacity: 1; transform: translateY(0); }
+  </style>
+</head>
+<body>
+  <div class="app">
+    <header class="topbar">
+      <div class="brand">
+        <span class="logo">TREE LINK</span>
+        <span class="sub" id="contextHint">多 Mac 实时控屏 · 拖拽文件直传 · 剪贴板同步</span>
+      </div>
+      <div class="controls">
+        <input id="addName" placeholder="设备名 (如 Mac-2)" style="width:118px" />
+        <input id="addHost" placeholder="添加另一台 Mac IP:端口 (如 192.168.50.88:47474)" style="width:240px" />
+        <input id="addToken" placeholder="令牌(可留空)" style="width:92px" />
+        <button class="primary" id="addBtn">+ 添加一台 Mac</button>
+        <button id="btnSplitH" class="active">左右分屏</button>
+        <button id="btnSplitV">上下分屏</button>
+        <button id="btnSingle">单屏</button>
+      </div>
+    </header>
+    <main class="grid" id="grid" data-layout="split-h"></main>
+  </div>
+  <div class="toast" id="toast"></div>
+
+  <script>
+  (() => {
+    const PAGE_KEYBOARD = 0x07;
+    const hid = (u) => ((PAGE_KEYBOARD << 16) | u) >>> 0;
+    const HID_LCTRL = hid(0xe0), HID_LSHIFT = hid(0xe1), HID_LALT = hid(0xe2), HID_LGUI = hid(0xe3);
+    const HID_RCTRL = hid(0xe4), HID_RSHIFT = hid(0xe5), HID_RALT = hid(0xe6), HID_RGUI = hid(0xe7);
+    const HID_SPACE = hid(0x2c), HID_TAB = hid(0x2b);
+
+    const CODE_TO_HID = {
+      KeyA:hid(0x04),KeyB:hid(0x05),KeyC:hid(0x06),KeyD:hid(0x07),KeyE:hid(0x08),KeyF:hid(0x09),KeyG:hid(0x0a),
+      KeyH:hid(0x0b),KeyI:hid(0x0c),KeyJ:hid(0x0d),KeyK:hid(0x0e),KeyL:hid(0x0f),KeyM:hid(0x10),KeyN:hid(0x11),
+      KeyO:hid(0x12),KeyP:hid(0x13),KeyQ:hid(0x14),KeyR:hid(0x15),KeyS:hid(0x16),KeyT:hid(0x17),KeyU:hid(0x18),
+      KeyV:hid(0x19),KeyW:hid(0x1a),KeyX:hid(0x1b),KeyY:hid(0x1c),KeyZ:hid(0x1d),
+      Digit1:hid(0x1e),Digit2:hid(0x1f),Digit3:hid(0x20),Digit4:hid(0x21),Digit5:hid(0x22),
+      Digit6:hid(0x23),Digit7:hid(0x24),Digit8:hid(0x25),Digit9:hid(0x26),Digit0:hid(0x27),
+      Enter:hid(0x28),Escape:hid(0x29),Backspace:hid(0x2a),Tab:hid(0x2b),Space:hid(0x2c),
+      Minus:hid(0x2d),Equal:hid(0x2e),BracketLeft:hid(0x2f),BracketRight:hid(0x30),Backslash:hid(0x31),
+      Semicolon:hid(0x33),Quote:hid(0x34),Backquote:hid(0x35),Comma:hid(0x36),Period:hid(0x37),Slash:hid(0x38),
+      CapsLock:hid(0x39),
+      F1:hid(0x3a),F2:hid(0x3b),F3:hid(0x3c),F4:hid(0x3d),F5:hid(0x3e),F6:hid(0x3f),
+      F7:hid(0x40),F8:hid(0x41),F9:hid(0x42),F10:hid(0x43),F11:hid(0x44),F12:hid(0x45),
+      Insert:hid(0x49),Home:hid(0x4a),PageUp:hid(0x4b),Delete:hid(0x4c),End:hid(0x4d),PageDown:hid(0x4e),
+      ArrowRight:hid(0x4f),ArrowLeft:hid(0x50),ArrowDown:hid(0x51),ArrowUp:hid(0x52),
+      NumpadDivide:hid(0x54),NumpadMultiply:hid(0x55),NumpadSubtract:hid(0x56),NumpadAdd:hid(0x57),
+      NumpadEnter:hid(0x58),Numpad1:hid(0x59),Numpad2:hid(0x5a),Numpad3:hid(0x5b),Numpad4:hid(0x5c),
+      Numpad5:hid(0x5d),Numpad6:hid(0x5e),Numpad7:hid(0x5f),Numpad8:hid(0x60),Numpad9:hid(0x61),
+      Numpad0:hid(0x62),NumpadDecimal:hid(0x63),
+      ControlLeft:HID_LCTRL,ShiftLeft:HID_LSHIFT,AltLeft:HID_LALT,MetaLeft:HID_LGUI,
+      ControlRight:HID_RCTRL,ShiftRight:HID_RSHIFT,AltRight:HID_RALT,MetaRight:HID_RGUI,
+    };
+
+    const MOUSE_MAP = { 0:'left', 1:'middle', 2:'right', 3:'back', 4:'forward' };
+    const PRESETS = [
+      { id:'code-1080', label:'清晰 1080p·60fps', w:1920, h:1200, fps:60, kbps:16000 },
+      { id:'code-2k', label:'高清 2K·60fps', w:2560, h:1600, fps:60, kbps:24000 },
+      { id:'smooth-900', label:'极速 900p·60fps', w:1440, h:900, fps:60, kbps:10000 },
+      { id:'retina-4k', label:'原画 4K·30fps', w:3840, h:2400, fps:30, kbps:35000 },
+    ];
+    const hasWebCodecs = typeof VideoDecoder !== 'undefined';
+    document.getElementById('contextHint').textContent = hasWebCodecs
+      ? 'WebCodecs 硬件 H.264/HEVC 已就绪 · 支持多 Mac 分屏、拖拽传文件、剪贴板互通'
+      : '局域网直连兼容模式 (Apple Silicon GPU JPEG 实时流) · 支持多 Mac 分屏、拖拽传文件、剪贴板互通';
+
+    let toastTimer = null;
+    function showToast(msg) {
+      const el = document.getElementById('toast');
+      el.textContent = msg;
+      el.classList.add('show');
+      clearTimeout(toastTimer);
+      toastTimer = setTimeout(() => el.classList.remove('show'), 3200);
+    }
+
+    function domToHid(code, swapCtrlCmd) {
+      const raw = CODE_TO_HID[code];
+      if (raw === undefined) return null;
+      if (swapCtrlCmd) {
+        if (raw === HID_LCTRL) return HID_LGUI;
+        if (raw === HID_RCTRL) return HID_RGUI;
+        if (raw === HID_LGUI) return HID_LCTRL;
+        if (raw === HID_RGUI) return HID_RCTRL;
+      }
+      return raw;
+    }
+
+    function parseFrame(buf) {
+      if (buf.byteLength < 20) return null;
+      const dv = new DataView(buf);
+      if (dv.getUint8(0) !== 0x54) return null;
+      const flags = dv.getUint8(1);
+      const cid = dv.getUint8(2);
+      const codec = cid === 1 ? 'h264' : cid === 2 ? 'hevc' : cid === 3 ? 'jpeg' : null;
+      if (!codec) return null;
+      return {
+        displayId: dv.getUint32(4, false),
+        width: dv.getUint16(8, false),
+        height: dv.getUint16(10, false),
+        codec,
+        isKeyframe: (flags & 1) !== 0,
+        timestampUs: dv.getUint32(12, false) * 4294967296 + dv.getUint32(16, false),
+        payload: new Uint8Array(buf, 20),
+      };
+    }
+
+    const grid = document.getElementById('grid');
+    function setLayout(mode) {
+      grid.dataset.layout = mode;
+      document.getElementById('btnSplitH').classList.toggle('active', mode === 'split-h');
+      document.getElementById('btnSplitV').classList.toggle('active', mode === 'split-v');
+      document.getElementById('btnSingle').classList.toggle('active', mode === 'single');
+    }
+    document.getElementById('btnSplitH').onclick = () => setLayout('split-h');
+    document.getElementById('btnSplitV').onclick = () => setLayout('split-v');
+    document.getElementById('btnSingle').onclick = () => setLayout('single');
+
+    function createPane({ name, host, token }) {
+      const pane = document.createElement('section');
+      pane.className = 'pane';
+      const defaultCodec = hasWebCodecs ? 'h264' : 'jpeg';
+      let currentCodec = defaultCodec;
+      let currentPreset = PRESETS[0].id;
+      let currentDisplay = 0;
+      let swapCtrlCmd = true;
+      let focused = false;
+      let ws = null;
+      let decoder = null;
+      let decoderKey = '';
+      let awaitingKey = true;
+      let jpegBusy = false;
+      let frames = 0;
+      let lastFpsAt = performance.now();
+      let pingTimer = null;
+
+      pane.innerHTML = `
+        <header class="pane-bar">
+          <div class="pane-title">
+            <span class="dot connecting"></span>
+            <strong class="p-name"></strong>
+            <span class="badge p-host"></span>
+            <span class="meta p-res"></span>
+            <span class="meta p-fps"></span>
+            <span class="meta p-rtt"></span>
+          </div>
+          <div class="controls">
+            <select class="p-display" style="display:none" title="选择 Mac 显示器"></select>
+            <select class="p-preset" title="清晰度与帧率">
+              ${PRESETS.map(p => `<option value="${p.id}">${p.label}</option>`).join('')}
+            </select>
+            <select class="p-codec" title="视频流编码">
+              <option value="jpeg"${defaultCodec === 'jpeg' ? ' selected' : ''}>GPU JPEG (免证书通用)</option>
+              ${hasWebCodecs ? `<option value="h264" selected>H.264 硬件 60fps</option><option value="hevc">HEVC 硬件</option>` : ''}
+            </select>
+            <button class="p-mod active" title="Ctrl 与 ⌘Command 互换">Ctrl→⌘</button>
+            <button class="p-spot" title="发送 ⌘Space">⌘Space</button>
+            <button class="p-tab" title="发送 ⌘Tab">⌘Tab</button>
+            <button class="p-clip-push" title="发送文字到这台 Mac 的剪贴板">发剪贴板</button>
+            <button class="p-clip-pull" title="读取这台 Mac 的剪贴板">读剪贴板</button>
+            <button class="p-full" title="全屏">全屏</button>
+            <button class="p-reconn" title="重连">重连</button>
+            <button class="p-close" title="关闭">关闭</button>
+          </div>
+        </header>
+        <div class="stage" tabindex="0">
+          <canvas></canvas>
+          <div class="overlay">
+            <strong class="o-title">正在连接…</strong>
+            <div class="overlay-msg o-msg"></div>
+            <button class="primary o-retry">重新连接</button>
+          </div>
+          <div class="drop-banner">松开鼠标即可直接把文件传输到这台 Mac（~/Downloads/TREE-LINK-Received/）</div>
+        </div>
+      `;
+
+      const $ = (s) => pane.querySelector(s);
+      $('.p-name').textContent = name || host;
+      $('.p-host').textContent = host;
+      const dot = $('.dot');
+      const canvas = $('canvas');
+      const ctx = canvas.getContext('2d', { alpha: false });
+      const stage = $('.stage');
+      const overlay = $('.overlay');
+      const oTitle = $('.o-title');
+      const oMsg = $('.o-msg');
+      const selDisplay = $('.p-display');
+      const selPreset = $('.p-preset');
+      const selCodec = $('.p-codec');
+      const btnMod = $('.p-mod');
+
+      const baseHttp = `http://${host}`;
+      const qsToken = token ? `?token=${encodeURIComponent(token)}` : '';
+      const wsUrl = `ws://${host}/ws${qsToken}`;
+
+      function setState(state, title, msg) {
+        dot.className = `dot ${state}`;
+        if (state === 'streaming') {
+          overlay.classList.add('hidden');
+        } else {
+          overlay.classList.remove('hidden');
+          oTitle.textContent = title || '';
+          oMsg.textContent = msg || '';
+        }
+      }
+
+      function sendJson(obj) {
+        if (ws && ws.readyState === WebSocket.OPEN) {
+          ws.send(JSON.stringify(obj));
+        }
+      }
+
+      function sendInput(ev) {
+        sendJson({ type: 'input', event: ev });
+      }
+
+      function subscribe() {
+        const p = PRESETS.find(x => x.id === currentPreset) || PRESETS[0];
+        awaitingKey = true;
+        sendJson({
+          type: 'subscribe',
+          displayId: currentDisplay,
+          maxWidth: p.w,
+          maxHeight: p.h,
+          fps: p.fps,
+          bitrateKbps: p.kbps,
+          codec: currentCodec,
+          showCursor: true,
+        });
+      }
+
+      function bumpFps(w, h) {
+        $('.p-res').textContent = `${w}×${h}`;
+        frames += 1;
+        const now = performance.now();
+        if (now - lastFpsAt >= 1000) {
+          $('.p-fps').textContent = `${Math.round((frames * 1000) / (now - lastFpsAt))} fps`;
+          frames = 0;
+          lastFpsAt = now;
+        }
+      }
+
+      function ensureDecoder(codec, w, h) {
+        if (!hasWebCodecs) return null;
+        const codecStr = codec === 'hevc' ? 'hvc1.1.6.L120.B0' : 'avc1.640028';
+        const key = `${codecStr}:${w}x${h}`;
+        if (decoder && decoder.state === 'configured' && decoderKey === key) return decoder;
+        if (decoder) { try { decoder.close(); } catch {} decoder = null; }
+        decoder = new VideoDecoder({
+          output: (vf) => {
+            if (canvas.width !== vf.displayWidth || canvas.height !== vf.displayHeight) {
+              canvas.width = vf.displayWidth;
+              canvas.height = vf.displayHeight;
+            }
+            ctx.drawImage(vf, 0, 0, canvas.width, canvas.height);
+            bumpFps(vf.displayWidth, vf.displayHeight);
+            vf.close();
+          },
+          error: () => {
+            awaitingKey = true;
+            sendJson({ type: 'request_keyframe' });
+          },
+        });
+        decoder.configure({ codec: codecStr, optimizeForLatency: true, hardwareAcceleration: 'prefer-hardware' });
+        decoderKey = key;
+        return decoder;
+      }
+
+      function connect() {
+        disconnect(false);
+        setState('connecting', `正在连接 ${name || host}…`, '');
+        ws = new WebSocket(wsUrl);
+        ws.binaryType = 'arraybuffer';
+        pingTimer = setInterval(() => sendJson({ type: 'ping', client_time_ms: Date.now() }), 2000);
+
+        ws.onmessage = (ev) => {
+          if (typeof ev.data === 'string') {
+            try {
+              const m = JSON.parse(ev.data);
+              if (m.type === 'hello') {
+                if (m.device_name) $('.p-name').textContent = name || m.device_name;
+                const list = m.displays || [];
+                if (list.length > 0) {
+                  selDisplay.innerHTML = list.map(d =>
+                    `<option value="${d.displayId}">${d.name}${d.isPrimary ? ' (主屏)' : ''}</option>`
+                  ).join('');
+                  selDisplay.style.display = list.length > 1 ? '' : 'none';
+                  const primary = list.find(d => d.isPrimary) || list[0];
+                  currentDisplay = primary.displayId;
+                  selDisplay.value = String(currentDisplay);
+                }
+                if (m.permissions && m.permissions.screenRecording === false) {
+                  setState('error', 'Mac 尚未开启「屏幕录制」权限', '请在 Mac 终端运行 --request-permissions 或在「系统设置 → 隐私与安全性 → 屏幕录制」中勾选终端/TREE LINK，然后重连。');
+                  return;
+                }
+                if (m.permissions && m.permissions.accessibility === false) {
+                  showToast(`${m.device_name || host} 尚未开启「辅助功能」权限，当前可看画面但键鼠注入会被系统拦截`);
+                }
+                subscribe();
+              } else if (m.type === 'stream_started') {
+                setState('streaming');
+              } else if (m.type === 'pong') {
+                const rtt = Math.max(0, Date.now() - Number(m.client_time_ms || 0));
+                $('.p-rtt').textContent = `${rtt} ms`;
+              } else if (m.type === 'error') {
+                setState('error', '推流失败', m.message || m.code);
+              }
+            } catch {}
+            return;
+          }
+
+          if (ev.data instanceof ArrayBuffer) {
+            const f = parseFrame(ev.data);
+            if (!f) return;
+            if (f.codec === 'jpeg') {
+              if (jpegBusy) return;
+              jpegBusy = true;
+              const blob = new Blob([f.payload], { type: 'image/jpeg' });
+              createImageBitmap(blob).then((bmp) => {
+                if (canvas.width !== bmp.width || canvas.height !== bmp.height) {
+                  canvas.width = bmp.width;
+                  canvas.height = bmp.height;
+                }
+                ctx.drawImage(bmp, 0, 0, canvas.width, canvas.height);
+                bmp.close();
+                bumpFps(f.width, f.height);
+                setState('streaming');
+              }).catch(() => {}).finally(() => { jpegBusy = false; });
+              return;
+            }
+            if (awaitingKey && !f.isKeyframe) return;
+            const dec = ensureDecoder(f.codec, f.width, f.height);
+            if (!dec || dec.state !== 'configured') return;
+            if (dec.decodeQueueSize > 3 && !f.isKeyframe) {
+              awaitingKey = true;
+              sendJson({ type: 'request_keyframe' });
+              return;
+            }
+            try {
+              dec.decode(new EncodedVideoChunk({
+                type: f.isKeyframe ? 'key' : 'delta',
+                timestamp: f.timestampUs,
+                data: f.payload,
+              }));
+              if (f.isKeyframe) {
+                awaitingKey = false;
+                setState('streaming');
+              }
+            } catch {
+              awaitingKey = true;
+              sendJson({ type: 'request_keyframe' });
+            }
+          }
+        };
+
+        ws.onerror = () => setState('error', `无法连接到 ${host}`, '请确认目标 Mac 已运行 TREE LINK 并且两台设备在同一局域网或网线/雷电直连。');
+        ws.onclose = () => {
+          if (!dot.classList.contains('error')) setState('closed', '连接已断开', '点击重连恢复实时桌面。');
+        };
+      }
+
+      function disconnect(removeEl) {
+        clearInterval(pingTimer);
+        if (ws) {
+          try {
+            if (ws.readyState === WebSocket.OPEN) {
+              sendInput({ kind: 'release_all' });
+              sendJson({ type: 'stop_stream' });
+            }
+            ws.close();
+          } catch {}
+          ws = null;
+        }
+        if (decoder) { try { decoder.close(); } catch {} decoder = null; }
+        if (removeEl) pane.remove();
+      }
+
+      function norm(e) {
+        const r = canvas.getBoundingClientRect();
+        if (r.width <= 0 || r.height <= 0) return null;
+        return {
+          nx: Math.min(1, Math.max(0, (e.clientX - r.left) / r.width)),
+          ny: Math.min(1, Math.max(0, (e.clientY - r.top) / r.height)),
+        };
+      }
+
+      selDisplay.onchange = () => { currentDisplay = Number(selDisplay.value); subscribe(); };
+      selPreset.onchange = () => { currentPreset = selPreset.value; subscribe(); };
+      selCodec.onchange = () => { currentCodec = selCodec.value; subscribe(); };
+      btnMod.onclick = () => {
+        swapCtrlCmd = !swapCtrlCmd;
+        btnMod.textContent = swapCtrlCmd ? 'Ctrl→⌘' : 'Win→⌘';
+        btnMod.classList.toggle('active', swapCtrlCmd);
+      };
+      $('.p-spot').onclick = () => {
+        sendInput({ kind:'key', hid_code:HID_LGUI, pressed:true });
+        sendInput({ kind:'key', hid_code:HID_SPACE, pressed:true });
+        sendInput({ kind:'key', hid_code:HID_SPACE, pressed:false });
+        sendInput({ kind:'key', hid_code:HID_LGUI, pressed:false });
+      };
+      $('.p-tab').onclick = () => {
+        sendInput({ kind:'key', hid_code:HID_LGUI, pressed:true });
+        sendInput({ kind:'key', hid_code:HID_TAB, pressed:true });
+        sendInput({ kind:'key', hid_code:HID_TAB, pressed:false });
+        sendInput({ kind:'key', hid_code:HID_LGUI, pressed:false });
+      };
+      $('.p-clip-push').onclick = async () => {
+        let text = '';
+        try { text = await navigator.clipboard.readText(); } catch {}
+        if (!text) text = window.prompt('输入要写入该 Mac 剪贴板的文本：') || '';
+        if (!text) return;
+        const r = await fetch(`${baseHttp}/api/clipboard${qsToken}`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'text/plain; charset=utf-8' },
+          body: text,
+        });
+        showToast(r.ok ? `已同步 ${text.length} 字到 ${$('.p-name').textContent} 剪贴板` : '发送剪贴板失败');
+      };
+      $('.p-clip-pull').onclick = async () => {
+        const r = await fetch(`${baseHttp}/api/clipboard${qsToken}`);
+        if (!r.ok) { showToast('读取 Mac 剪贴板失败'); return; }
+        const data = await r.json();
+        const text = data.text || '';
+        try {
+          await navigator.clipboard.writeText(text);
+          showToast(`已从 ${$('.p-name').textContent} 复制 ${text.length} 字到本地剪贴板`);
+        } catch {
+          window.prompt('Mac 剪贴板内容（按 Ctrl+C 复制）：', text);
+        }
+      };
+      $('.p-full').onclick = () => {
+        if (document.fullscreenElement === pane) document.exitFullscreen();
+        else pane.requestFullscreen?.();
+      };
+      $('.p-reconn').onclick = connect;
+      $('.o-retry').onclick = connect;
+      $('.p-close').onclick = () => disconnect(true);
+
+      stage.onfocus = () => { focused = true; pane.classList.add('focused'); };
+      stage.onblur = () => { focused = false; pane.classList.remove('focused'); sendInput({ kind:'release_all' }); };
+      stage.onkeydown = (e) => {
+        if (!focused) return;
+        const code = domToHid(e.code, swapCtrlCmd);
+        if (code === null) return;
+        e.preventDefault(); e.stopPropagation();
+        sendInput({ kind:'key', hid_code:code, pressed:true });
+      };
+      stage.onkeyup = (e) => {
+        if (!focused) return;
+        const code = domToHid(e.code, swapCtrlCmd);
+        if (code === null) return;
+        e.preventDefault(); e.stopPropagation();
+        sendInput({ kind:'key', hid_code:code, pressed:false });
+      };
+
+      canvas.oncontextmenu = (e) => e.preventDefault();
+      canvas.onpointermove = (e) => {
+        const pt = norm(e);
+        if (pt) sendInput({ kind:'pointer_move', display_id:currentDisplay, nx:pt.nx, ny:pt.ny });
+      };
+      canvas.onpointerdown = (e) => {
+        stage.focus();
+        const pt = norm(e), button = MOUSE_MAP[e.button];
+        if (!pt || !button) return;
+        e.preventDefault();
+        canvas.setPointerCapture?.(e.pointerId);
+        sendInput({ kind:'pointer_button', display_id:currentDisplay, nx:pt.nx, ny:pt.ny, button, pressed:true });
+      };
+      canvas.onpointerup = (e) => {
+        const pt = norm(e), button = MOUSE_MAP[e.button];
+        if (!pt || !button) return;
+        e.preventDefault();
+        sendInput({ kind:'pointer_button', display_id:currentDisplay, nx:pt.nx, ny:pt.ny, button, pressed:false });
+      };
+      canvas.onwheel = (e) => {
+        const pt = norm(e);
+        if (!pt) return;
+        e.preventDefault();
+        sendInput({ kind:'scroll', display_id:currentDisplay, nx:pt.nx, ny:pt.ny, dx:-e.deltaX, dy:-e.deltaY, pixel:e.deltaMode===0 });
+      };
+
+      // Drag & drop files straight onto the Mac screen to transfer them!
+      pane.ondragover = (e) => { e.preventDefault(); pane.classList.add('drop-hover'); };
+      pane.ondragleave = () => pane.classList.remove('drop-hover');
+      pane.ondrop = async (e) => {
+        e.preventDefault();
+        pane.classList.remove('drop-hover');
+        const files = Array.from(e.dataTransfer?.files || []);
+        for (const file of files) {
+          showToast(`正在传输 ${file.name} 到 ${$('.p-name').textContent}…`);
+          const url = `${baseHttp}/api/upload?name=${encodeURIComponent(file.name)}${token ? `&token=${encodeURIComponent(token)}` : ''}`;
+          const res = await fetch(url, { method: 'POST', body: file });
+          if (res.ok) {
+            const info = await res.json();
+            showToast(`已送达：${info.savedPath}`);
+          } else {
+            showToast(`传输 ${file.name} 失败 (${res.status})`);
+          }
+        }
+      };
+
+      grid.appendChild(pane);
+      connect();
+    }
+
+    document.getElementById('addBtn').onclick = () => {
+      const rawHost = document.getElementById('addHost').value.trim();
+      if (!rawHost) return;
+      const host = rawHost.includes(':') ? rawHost : `${rawHost}:47474`;
+      const name = document.getElementById('addName').value.trim();
+      const token = document.getElementById('addToken').value.trim();
+      createPane({ name, host, token });
+      document.getElementById('addHost').value = '';
+      document.getElementById('addName').value = '';
+    };
+
+    const params = new URLSearchParams(location.search);
+    createPane({
+      name: params.get('name') || '',
+      host: params.get('host') || location.host,
+      token: params.get('token') || '',
+    });
+  })();
+  </script>
+</body>
+</html>

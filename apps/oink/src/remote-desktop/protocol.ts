@@ -1,4 +1,4 @@
-export type VideoCodec = 'h264' | 'hevc';
+export type VideoCodec = 'h264' | 'hevc' | 'jpeg';
 export type LinkClass = 'direct_cable' | 'wired_lan' | 'wifi_lan' | 'other';
 export type MouseButtonKind = 'left' | 'right' | 'middle' | 'back' | 'forward';
 
@@ -80,7 +80,7 @@ export function parseVideoFrame(buffer: ArrayBuffer): ParsedVideoFrame | null {
   if (view.getUint8(0) !== VIDEO_FRAME_MAGIC) return null;
   const flags = view.getUint8(1);
   const codecId = view.getUint8(2);
-  const codec: VideoCodec | null = codecId === 1 ? 'h264' : codecId === 2 ? 'hevc' : null;
+  const codec: VideoCodec | null = codecId === 1 ? 'h264' : codecId === 2 ? 'hevc' : codecId === 3 ? 'jpeg' : null;
   if (!codec) return null;
   const displayId = view.getUint32(4, false);
   const width = view.getUint16(8, false);

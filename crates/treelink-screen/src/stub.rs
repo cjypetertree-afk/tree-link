@@ -22,6 +22,10 @@ pub fn request_screen_recording_permission() -> bool {
     true
 }
 
+pub fn request_accessibility_permission() -> bool {
+    true
+}
+
 pub fn list_displays() -> Vec<DisplayDescriptor> {
     let Ok(backend) = oink_display::platform_backend() else {
         return Vec::new();

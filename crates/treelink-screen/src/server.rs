@@ -18,9 +18,14 @@ use crate::protocol::{
     encode_video_frame,
 };
 use crate::ws::{
-    WsMessage, complete_ws_handshake, read_http_handshake, read_ws_message, write_http_response, write_ws_binary,
-    write_ws_close, write_ws_pong, write_ws_text,
+    WsMessage, complete_ws_handshake, read_http_body, read_http_handshake, read_ws_message, write_http_response,
+    write_ws_binary, write_ws_close, write_ws_pong, write_ws_text,
 };
+
+/// Embedded self-contained multi-Mac web control console served at `GET /`.
+const VIEWER_HTML: &str = include_str!("viewer.html");
+const MAX_CLIPBOARD_BYTES: usize = 1024 * 1024;
+const MAX_UPLOAD_BYTES: usize = 64 * 1024 * 1024;
 
 /// Maximum queued encoded video frames per viewer before dropping stale deltas to protect latency.
 const MAX_QUEUED_VIDEO_FRAMES: usize = 4;
@@ -201,6 +206,22 @@ async fn handle_connection(
         }
     };
 
+    if req.method == "OPTIONS" {
+        let _ = write_http_response(&mut stream, "204 No Content", "text/plain", b"").await;
+        return;
+    }
+
+    if req.method == "GET" && (req.path == "/" || req.path == "/index.html") {
+        let _ = write_http_response(
+            &mut stream,
+            "200 OK",
+            "text/html; charset=utf-8",
+            VIEWER_HTML.as_bytes(),
+        )
+        .await;
+        return;
+    }
+
     if req.path == "/health" {
         let body = serde_json::json!({
             "service": "tree-link-screen",
@@ -224,6 +245,16 @@ async fn handle_connection(
 
     if !token_matches(&expected, provided) {
         let _ = write_http_response(&mut stream, "401 Unauthorized", "text/plain", b"unauthorized").await;
+        return;
+    }
+
+    if req.path == "/api/clipboard" {
+        handle_clipboard_http(&mut stream, &req).await;
+        return;
+    }
+
+    if req.path == "/api/upload" && req.method == "POST" {
+        handle_upload_http(&mut stream, &req).await;
         return;
     }
 
@@ -284,7 +315,7 @@ async fn handle_connection(
         permissions: crate::platform::permissions(),
         displays: crate::platform::list_displays(),
         interfaces: rank_local_interfaces(),
-        codecs: vec![VideoCodec::H264, VideoCodec::Hevc],
+        codecs: vec![VideoCodec::H264, VideoCodec::Hevc, VideoCodec::Jpeg],
     };
     if let Ok(text) = serde_json::to_string(&hello) {
         let _ = ctrl_tx.send(OutboundPacket::Text(text)).await;
@@ -428,10 +459,183 @@ async fn send_server_msg(ctrl_tx: &mpsc::Sender<OutboundPacket>, msg: &ServerMsg
     }
 }
 
+fn percent_decode(raw: &str) -> String {
+    let bytes = raw.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'%'
+            && i + 2 < bytes.len()
+            && let Ok(hex) = std::str::from_utf8(&bytes[i + 1..i + 3])
+            && let Ok(val) = u8::from_str_radix(hex, 16)
+        {
+            out.push(val);
+            i += 3;
+            continue;
+        }
+        if bytes[i] == b'+' {
+            out.push(b' ');
+        } else {
+            out.push(bytes[i]);
+        }
+        i += 1;
+    }
+    String::from_utf8_lossy(&out).into_owned()
+}
+
+fn sanitize_filename(raw: &str) -> Option<String> {
+    let decoded = percent_decode(raw);
+    let base = std::path::Path::new(&decoded).file_name()?.to_str()?.trim();
+    if base.is_empty()
+        || base == "."
+        || base == ".."
+        || base.contains('/')
+        || base.contains('\\')
+        || base.contains('\0')
+    {
+        return None;
+    }
+    Some(base.to_string())
+}
+
+async fn handle_clipboard_http(stream: &mut TcpStream, req: &crate::ws::HandshakeRequest) {
+    if req.method == "GET" {
+        let text = read_local_clipboard_text().await.unwrap_or_default();
+        let body = serde_json::to_vec(&serde_json::json!({ "text": text })).unwrap_or_default();
+        let _ = write_http_response(stream, "200 OK", "application/json", &body).await;
+        return;
+    }
+    if req.method == "POST" {
+        match read_http_body(stream, req, MAX_CLIPBOARD_BYTES).await {
+            Ok(bytes) => {
+                let text = String::from_utf8_lossy(&bytes).into_owned();
+                if write_local_clipboard_text(text).await.is_ok() {
+                    let _ = write_http_response(stream, "200 OK", "application/json", b"{\"ok\":true}").await;
+                } else {
+                    let _ = write_http_response(
+                        stream,
+                        "500 Internal Server Error",
+                        "application/json",
+                        b"{\"error\":\"clipboard_write_failed\"}",
+                    )
+                    .await;
+                }
+            }
+            Err(_) => {
+                let _ = write_http_response(stream, "413 Payload Too Large", "text/plain", b"too large").await;
+            }
+        }
+        return;
+    }
+    let _ = write_http_response(stream, "405 Method Not Allowed", "text/plain", b"method not allowed").await;
+}
+
+async fn handle_upload_http(stream: &mut TcpStream, req: &crate::ws::HandshakeRequest) {
+    let Some(raw_name) = req.query.get("name") else {
+        let _ = write_http_response(stream, "400 Bad Request", "text/plain", b"missing name").await;
+        return;
+    };
+    let Some(file_name) = sanitize_filename(raw_name) else {
+        let _ = write_http_response(stream, "400 Bad Request", "text/plain", b"invalid filename").await;
+        return;
+    };
+    let body = match read_http_body(stream, req, MAX_UPLOAD_BYTES).await {
+        Ok(b) => b,
+        Err(_) => {
+            let _ = write_http_response(stream, "413 Payload Too Large", "text/plain", b"file exceeds 64 MiB").await;
+            return;
+        }
+    };
+
+    let base_dir = std::env::var_os("HOME")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(std::env::temp_dir)
+        .join("Downloads")
+        .join("TREE-LINK-Received");
+    if tokio::fs::create_dir_all(&base_dir).await.is_err() {
+        let _ = write_http_response(stream, "500 Internal Server Error", "text/plain", b"mkdir failed").await;
+        return;
+    }
+
+    let mut dest = base_dir.join(&file_name);
+    if dest.exists() {
+        let stem = std::path::Path::new(&file_name)
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or("file");
+        let ext = std::path::Path::new(&file_name).extension().and_then(|s| s.to_str());
+        for idx in 1u32..1000 {
+            let candidate = match ext {
+                Some(e) => base_dir.join(format!("{stem}-{idx}.{e}")),
+                None => base_dir.join(format!("{stem}-{idx}")),
+            };
+            if !candidate.exists() {
+                dest = candidate;
+                break;
+            }
+        }
+    }
+
+    match tokio::fs::write(&dest, &body).await {
+        Ok(()) => {
+            let resp = serde_json::json!({
+                "savedPath": dest.display().to_string(),
+                "bytes": body.len(),
+            });
+            let bytes = serde_json::to_vec(&resp).unwrap_or_default();
+            let _ = write_http_response(stream, "200 OK", "application/json", &bytes).await;
+        }
+        Err(_) => {
+            let _ = write_http_response(stream, "500 Internal Server Error", "text/plain", b"write failed").await;
+        }
+    }
+}
+
+async fn read_local_clipboard_text() -> std::io::Result<String> {
+    #[cfg(target_os = "macos")]
+    {
+        let out = tokio::process::Command::new("/usr/bin/pbpaste").output().await?;
+        Ok(String::from_utf8_lossy(&out.stdout).into_owned())
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        Ok(String::new())
+    }
+}
+
+async fn write_local_clipboard_text(text: String) -> std::io::Result<()> {
+    #[cfg(target_os = "macos")]
+    {
+        use std::process::Stdio;
+        let mut child = tokio::process::Command::new("/usr/bin/pbcopy")
+            .stdin(Stdio::piped())
+            .spawn()?;
+        if let Some(mut stdin) = child.stdin.take() {
+            stdin.write_all(text.as_bytes()).await?;
+        }
+        let _ = child.wait().await?;
+        Ok(())
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = text;
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use tokio::io::AsyncReadExt;
+
+    #[test]
+    fn sanitize_filename_rejects_traversal() {
+        assert_eq!(sanitize_filename("report%20v1.pdf").as_deref(), Some("report v1.pdf"));
+        assert_eq!(sanitize_filename("../../secret.txt").as_deref(), Some("secret.txt"));
+        assert_eq!(sanitize_filename(".."), None);
+        assert_eq!(sanitize_filename("."), None);
+        assert_eq!(sanitize_filename(""), None);
+    }
 
     #[tokio::test]
     async fn health_and_ws_ping_pong_roundtrip() {

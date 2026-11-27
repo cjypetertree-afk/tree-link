@@ -48,6 +48,7 @@ export function RemotePane({ target, speakerMuted, onToggleAudioMute, onClose }:
   const decoderRef = useRef<VideoDecoder | null>(null);
   const decoderCodecRef = useRef<string>('');
   const awaitingKeyframeRef = useRef<boolean>(true);
+  const jpegBusyRef = useRef<boolean>(false);
   const frameSizeRef = useRef<{ w: number; h: number }>({ w: 1920, h: 1080 });
   const fpsCounterRef = useRef<{ frames: number; lastMs: number }>({ frames: 0, lastMs: performance.now() });
 
@@ -56,7 +57,7 @@ export function RemotePane({ target, speakerMuted, onToggleAudioMute, onClose }:
   const [displays, setDisplays] = useState<DisplayDescriptor[]>([]);
   const [displayId, setDisplayId] = useState<number>(0);
   const [presetId, setPresetId] = useState<string>(QUALITY_PRESETS[0].id);
-  const [codec, setCodec] = useState<VideoCodec>('h264');
+  const [codec, setCodec] = useState<VideoCodec>(() => (typeof VideoDecoder !== 'undefined' ? 'h264' : 'jpeg'));
   const [modPreset, setModPreset] = useState<ModifierPreset>('ctrl_as_cmd');
   const [focused, setFocused] = useState<boolean>(false);
   const [rttMs, setRttMs] = useState<number | null>(null);
@@ -199,6 +200,37 @@ export function RemotePane({ target, speakerMuted, onToggleAudioMute, onClose }:
       if (event.data instanceof ArrayBuffer) {
         const frame = parseVideoFrame(event.data);
         if (!frame) return;
+        if (frame.codec === 'jpeg') {
+          if (jpegBusyRef.current) return;
+          jpegBusyRef.current = true;
+          const bytes = new Uint8Array(frame.payload.byteLength);
+          bytes.set(frame.payload);
+          const blob = new Blob([bytes], { type: 'image/jpeg' });
+          void createImageBitmap(blob).then((bmp) => {
+            const canvas = canvasRef.current;
+            if (canvas) {
+              if (canvas.width !== bmp.width || canvas.height !== bmp.height) {
+                canvas.width = bmp.width;
+                canvas.height = bmp.height;
+                frameSizeRef.current = { w: bmp.width, h: bmp.height };
+                setResolution(`${bmp.width}×${bmp.height}`);
+              }
+              const ctx = canvas.getContext('2d', { alpha: false });
+              if (ctx) ctx.drawImage(bmp, 0, 0, canvas.width, canvas.height);
+            }
+            bmp.close();
+            const counter = fpsCounterRef.current;
+            counter.frames += 1;
+            const now = performance.now();
+            if (now - counter.lastMs >= 1000) {
+              setFps(Math.round((counter.frames * 1000) / (now - counter.lastMs)));
+              counter.frames = 0;
+              counter.lastMs = now;
+            }
+            setStatus('streaming');
+          }).catch(() => {}).finally(() => { jpegBusyRef.current = false; });
+          return;
+        }
         if (awaitingKeyframeRef.current && !frame.isKeyframe) {
           return;
         }
@@ -338,6 +370,7 @@ export function RemotePane({ target, speakerMuted, onToggleAudioMute, onClose }:
           >
             <option value="h264">H.264</option>
             <option value="hevc">HEVC</option>
+            <option value="jpeg">GPU JPEG</option>
           </select>
           <Button
             size="sm"

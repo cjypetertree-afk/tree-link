@@ -18,7 +18,8 @@ mod stub;
 #[cfg(target_os = "macos")]
 pub(crate) mod platform {
     pub use crate::macos::{
-        CaptureHandle, host_capture_supported, list_displays, permissions, request_screen_recording_permission,
+        CaptureHandle, host_capture_supported, list_displays, permissions, request_accessibility_permission,
+        request_screen_recording_permission,
     };
     pub use crate::macos_input::InputInjector;
 }
@@ -27,14 +28,17 @@ pub(crate) mod platform {
 pub(crate) mod platform {
     pub use crate::stub::{
         CaptureHandle, InputInjector, host_capture_supported, list_displays, permissions,
-        request_screen_recording_permission,
+        request_accessibility_permission, request_screen_recording_permission,
     };
 }
 
 use sha2::{Digest as _, Sha256};
 
 pub use network_rank::{classify_ipv4, rank_local_interfaces, rank_peer_ips};
-pub use platform::{host_capture_supported, list_displays, permissions, request_screen_recording_permission};
+pub use platform::{
+    host_capture_supported, list_displays, permissions, request_accessibility_permission,
+    request_screen_recording_permission,
+};
 pub use protocol::{
     ClientMsg, DEFAULT_SCREEN_PORT, DisplayDescriptor, EncodedVideoFrame, LinkClass, LinkInterfaceInfo,
     MouseButtonKind, PermissionSummary, RemoteInputEvent, ServerMsg, StreamConfig, VIDEO_FRAME_MAGIC, VIDEO_HEADER_LEN,

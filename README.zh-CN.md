@@ -18,6 +18,21 @@ TREE LINK 完整保留了 Oink 优秀的底层跨平台能力——**原生键�
    - 底层统一基于 IP 传输，无缝支持 **千兆/2.5G 有线局域网**、**网线直连 / Thunderbolt / USB4 雷电网桥（`169.254.0.0/16`）** 与 **Wi-Fi**。
    - 内置 **多网卡智能优先级排序（`network_rank.rs`）**：自动优先选用 `169.254.x.x` 直连线缆与有线网卡，支持同组自动认证令牌与手动 IP 立即连接。
 
+## 30 秒实机试玩（无需在 Windows 上编译安装）
+
+1. **在你的 Mac 上启动 TREE LINK 被控端**：
+   - 双击项目根目录的 [`start-mac-host.command`](start-mac-host.command)，或在终端运行：
+     ```bash
+     cargo run --release -p treelink-screen --bin treelink-screen-host -- --request-permissions
+     ```
+   - 首次运行会引导开启 macOS **「屏幕录制」** 与 **「辅助功能」** 权限（在「系统设置 → 隐私与安全性」中勾选终端或 TREE LINK，随后重开一次程序生效）。
+   - 终端会打印本机局域网 / 直连 IP 地址，例如：`http://192.168.50.67:47474/`（或网线/雷电直连的 `http://169.254.x.x:47474/`）。
+2. **在你的 Windows 显示器上直接打开并操控**：
+   - 用 Windows 自带的 **Edge 或 Chrome** 直接打开上面的 `http://<Mac_IP>:47474/`。
+   - **开箱即用**：免证书自动启用 Apple Silicon GPU 实时视频流（若通过 Tauri 客户端或 HTTPS/localhost 访问则自动启用 60fps 硬件 H.264/HEVC）。
+   - 点击右上角 **「+ 添加一台 Mac」** 输入第二台 Mac 的 IP，即可在 Windows 显示器上**左右并排同时实时操控两台 Mac**！
+   - **直接拖拽 Windows 文件到任意 Mac 画面上**即可将文件传到对应 Mac 的 `~/Downloads/TREE-LINK-Received/`，也可一键互通剪贴板。
+
 ## 快速开发与构建
 
 ```bash

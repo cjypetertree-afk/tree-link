@@ -35,9 +35,11 @@ pub enum WsMessage {
 
 #[derive(Clone, Debug)]
 pub struct HandshakeRequest {
+    pub method: String,
     pub path: String,
     pub query: HashMap<String, String>,
     pub headers: HashMap<String, String>,
+    pub body_prefix: Vec<u8>,
 }
 
 /// Pure-Rust RFC 3174 SHA-1 used exclusively for RFC 6455 `Sec-WebSocket-Accept`.
@@ -124,8 +126,8 @@ pub async fn read_http_handshake<S: AsyncRead + Unpin>(stream: &mut S) -> Result
     let mut parts = req_line.split_whitespace();
     let method = parts.next().ok_or(WsError::Handshake("missing method"))?;
     let target = parts.next().ok_or(WsError::Handshake("missing target"))?;
-    if method != "GET" {
-        return Err(WsError::Handshake("expected GET"));
+    if !matches!(method, "GET" | "POST" | "OPTIONS") {
+        return Err(WsError::Handshake("unsupported HTTP method"));
     }
 
     let (path, query_str) = match target.split_once('?') {
@@ -148,7 +150,39 @@ pub async fn read_http_handshake<S: AsyncRead + Unpin>(stream: &mut S) -> Result
         }
     }
 
-    Ok(HandshakeRequest { path, query, headers })
+    let body_prefix = buf[header_end + 4..].to_vec();
+    Ok(HandshakeRequest {
+        method: method.to_string(),
+        path,
+        query,
+        headers,
+        body_prefix,
+    })
+}
+
+pub async fn read_http_body<S: AsyncRead + Unpin>(
+    stream: &mut S,
+    req: &HandshakeRequest,
+    max_bytes: usize,
+) -> Result<Vec<u8>, WsError> {
+    let content_len = req
+        .headers
+        .get("content-length")
+        .and_then(|v| v.parse::<usize>().ok())
+        .unwrap_or(0);
+    if content_len > max_bytes {
+        return Err(WsError::Protocol("HTTP body exceeds limit"));
+    }
+    let mut body = Vec::with_capacity(content_len);
+    let take_prefix = req.body_prefix.len().min(content_len);
+    body.extend_from_slice(&req.body_prefix[..take_prefix]);
+    if body.len() < content_len {
+        let remaining = content_len - body.len();
+        let old_len = body.len();
+        body.resize(old_len + remaining, 0);
+        stream.read_exact(&mut body[old_len..]).await?;
+    }
+    Ok(body)
 }
 
 pub async fn write_http_response<S: AsyncWrite + Unpin>(
@@ -158,7 +192,7 @@ pub async fn write_http_response<S: AsyncWrite + Unpin>(
     body: &[u8],
 ) -> Result<(), WsError> {
     let header = format!(
-        "HTTP/1.1 {status}\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\nAccess-Control-Allow-Origin: *\r\nConnection: close\r\n\r\n",
+        "HTTP/1.1 {status}\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\nAccess-Control-Allow-Origin: *\r\nAccess-Control-Allow-Methods: GET, POST, OPTIONS\r\nAccess-Control-Allow-Headers: Content-Type, X-TreeLink-Token\r\nConnection: close\r\n\r\n",
         body.len()
     );
     stream.write_all(header.as_bytes()).await?;

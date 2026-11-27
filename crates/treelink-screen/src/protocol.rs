@@ -25,6 +25,7 @@ pub enum VideoCodec {
     #[default]
     H264,
     Hevc,
+    Jpeg,
 }
 
 impl VideoCodec {
@@ -32,6 +33,7 @@ impl VideoCodec {
         match self {
             Self::H264 => 1,
             Self::Hevc => 2,
+            Self::Jpeg => 3,
         }
     }
 
@@ -39,6 +41,7 @@ impl VideoCodec {
         match id {
             1 => Some(Self::H264),
             2 => Some(Self::Hevc),
+            3 => Some(Self::Jpeg),
             _ => None,
         }
     }

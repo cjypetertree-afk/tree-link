@@ -5,9 +5,11 @@
 #import <ApplicationServices/ApplicationServices.h>
 #import <CoreFoundation/CoreFoundation.h>
 #import <CoreGraphics/CoreGraphics.h>
+#import <CoreImage/CoreImage.h>
 #import <CoreMedia/CoreMedia.h>
 #import <CoreVideo/CoreVideo.h>
 #import <Foundation/Foundation.h>
+#import <ImageIO/ImageIO.h>
 #import <ScreenCaptureKit/ScreenCaptureKit.h>
 #import <VideoToolbox/VideoToolbox.h>
 #include <stdatomic.h>
@@ -52,6 +54,13 @@ bool tl_request_screen_recording_permission(void) {
 
 bool tl_check_accessibility_permission(void) {
     return AXIsProcessTrusted();
+}
+
+bool tl_request_accessibility_permission(void) {
+    @autoreleasepool {
+        NSDictionary *opts = @{ (__bridge id)kAXTrustedCheckOptionPrompt: @YES };
+        return AXIsProcessTrustedWithOptions((__bridge CFDictionaryRef)opts);
+    }
 }
 
 size_t tl_list_displays(TLDisplayInfo *out_buf, size_t max_count) {
@@ -134,9 +143,12 @@ size_t tl_list_displays(TLDisplayInfo *out_buf, size_t max_count) {
     uint16_t enc_width;
     uint16_t enc_height;
     uint8_t codec_id;
+    float jpeg_quality;
     TLFrameCallback callback;
     void *user_data;
     VTCompressionSessionRef vt_session;
+    CIContext *ci_context;
+    CGColorSpaceRef jpeg_color_space;
     dispatch_queue_t sample_queue;
     dispatch_queue_t encode_queue;
     SCStream *stream;
@@ -296,7 +308,7 @@ static void tl_vt_output_callback(
     }
 
     CVImageBufferRef image_buf = CMSampleBufferGetImageBuffer(sampleBuffer);
-    if (!image_buf || !self->vt_session) {
+    if (!image_buf || (self->codec_id != 3 && !self->vt_session)) {
         return;
     }
 
@@ -305,31 +317,61 @@ static void tl_vt_output_callback(
     CVPixelBufferRetain(image_buf);
 
     dispatch_async(self->encode_queue, ^{
-        if (atomic_load(&self->stopped) == 0 && self->vt_session) {
-            CFDictionaryRef frame_props = NULL;
-            if (atomic_exchange(&self->force_keyframe, 0) != 0) {
-                const void *keys[1] = { kVTEncodeFrameOptionKey_ForceKeyFrame };
-                const void *vals[1] = { kCFBooleanTrue };
-                frame_props = CFDictionaryCreate(
-                    kCFAllocatorDefault,
-                    keys,
-                    vals,
-                    1,
-                    &kCFTypeDictionaryKeyCallBacks,
-                    &kCFTypeDictionaryValueCallBacks
+        if (atomic_load(&self->stopped) == 0) {
+            if (self->codec_id == 3 && self->ci_context && self->jpeg_color_space && self->callback) {
+                @autoreleasepool {
+                    CIImage *ci_img = [CIImage imageWithCVImageBuffer:image_buf];
+                    NSDictionary *opts = @{
+                        (__bridge NSString *)kCGImageDestinationLossyCompressionQuality: @(self->jpeg_quality)
+                    };
+                    NSData *jpeg = [self->ci_context JPEGRepresentationOfImage:ci_img
+                                                                    colorSpace:self->jpeg_color_space
+                                                                       options:opts];
+                    if (jpeg && jpeg.length > 0 && atomic_load(&self->stopped) == 0) {
+                        uint64_t ts_us = 0;
+                        if (CMTIME_IS_NUMERIC(pts) && pts.timescale > 0) {
+                            double secs = CMTimeGetSeconds(pts);
+                            if (secs > 0.0) ts_us = (uint64_t)(secs * 1000000.0);
+                        }
+                        self->callback(
+                            self->user_data,
+                            self->display_id,
+                            self->enc_width,
+                            self->enc_height,
+                            3,
+                            true,
+                            ts_us,
+                            (const uint8_t *)jpeg.bytes,
+                            jpeg.length
+                        );
+                    }
+                }
+            } else if (self->vt_session) {
+                CFDictionaryRef frame_props = NULL;
+                if (atomic_exchange(&self->force_keyframe, 0) != 0) {
+                    const void *keys[1] = { kVTEncodeFrameOptionKey_ForceKeyFrame };
+                    const void *vals[1] = { kCFBooleanTrue };
+                    frame_props = CFDictionaryCreate(
+                        kCFAllocatorDefault,
+                        keys,
+                        vals,
+                        1,
+                        &kCFTypeDictionaryKeyCallBacks,
+                        &kCFTypeDictionaryValueCallBacks
+                    );
+                }
+                VTCompressionSessionEncodeFrame(
+                    self->vt_session,
+                    image_buf,
+                    pts,
+                    dur,
+                    frame_props,
+                    NULL,
+                    NULL
                 );
-            }
-            VTCompressionSessionEncodeFrame(
-                self->vt_session,
-                image_buf,
-                pts,
-                dur,
-                frame_props,
-                NULL,
-                NULL
-            );
-            if (frame_props) {
-                CFRelease(frame_props);
+                if (frame_props) {
+                    CFRelease(frame_props);
+                }
             }
         }
         CVPixelBufferRelease(image_buf);
@@ -433,7 +475,7 @@ void *tl_capture_start(
         uint16_t out_h = make_even((uint32_t)(src_h * scale));
         uint32_t clamped_fps = fps < 5 ? 5 : (fps > 120 ? 120 : fps);
         uint32_t clamped_kbps = bitrate_kbps < 500 ? 500 : (bitrate_kbps > 80000 ? 80000 : bitrate_kbps);
-        uint8_t actual_codec = (codec_id == 2) ? 2 : 1;
+        uint8_t actual_codec = (codec_id == 2 || codec_id == 3) ? codec_id : 1;
 
         TLCaptureSession *session = [[TLCaptureSession alloc] init];
         atomic_init(&session->stopped, 0);
@@ -442,85 +484,107 @@ void *tl_capture_start(
         session->enc_width = out_w;
         session->enc_height = out_h;
         session->codec_id = actual_codec;
+        session->jpeg_quality = clamped_kbps >= 25000 ? 0.84f : (clamped_kbps >= 12000 ? 0.74f : 0.62f);
         session->callback = callback;
         session->user_data = user_data;
         session->sample_queue = dispatch_queue_create("com.treelink.screen.sample", DISPATCH_QUEUE_SERIAL);
         session->encode_queue = dispatch_queue_create("com.treelink.screen.encode", DISPATCH_QUEUE_SERIAL);
 
-        NSMutableDictionary *encoder_spec = [NSMutableDictionary dictionary];
-        encoder_spec[(__bridge NSString *)kVTVideoEncoderSpecification_EnableHardwareAcceleratedVideoEncoder] = @YES;
-        if (@available(macOS 11.3, *)) {
-            encoder_spec[(__bridge NSString *)kVTVideoEncoderSpecification_EnableLowLatencyRateControl] = @YES;
-        }
-
-        CMVideoCodecType cm_codec = (actual_codec == 2) ? kCMVideoCodecType_HEVC : kCMVideoCodecType_H264;
-        OSStatus vt_err = VTCompressionSessionCreate(
-            kCFAllocatorDefault,
-            (int32_t)out_w,
-            (int32_t)out_h,
-            cm_codec,
-            (__bridge CFDictionaryRef)encoder_spec,
-            NULL,
-            kCFAllocatorDefault,
-            tl_vt_output_callback,
-            (__bridge void *)session,
-            &session->vt_session
-        );
-        if (vt_err != noErr || !session->vt_session) {
-            if (err_buf && err_buf_len > 0) {
-                snprintf(err_buf, err_buf_len, "vt_create_failed:%d", (int)vt_err);
+        if (actual_codec == 3) {
+            session->ci_context = [CIContext contextWithOptions:@{ kCIContextUseSoftwareRenderer: @NO }];
+            session->jpeg_color_space = CGColorSpaceCreateWithName(kCGColorSpaceSRGB);
+            if (!session->ci_context || !session->jpeg_color_space) {
+                if (session->jpeg_color_space) {
+                    CFRelease(session->jpeg_color_space);
+                    session->jpeg_color_space = NULL;
+                }
+                if (err_buf && err_buf_len > 0) strncpy(err_buf, "ci_context_failed", err_buf_len - 1);
+                return NULL;
             }
-            return NULL;
+        } else {
+            NSMutableDictionary *encoder_spec = [NSMutableDictionary dictionary];
+            encoder_spec[(__bridge NSString *)kVTVideoEncoderSpecification_EnableHardwareAcceleratedVideoEncoder] = @YES;
+            if (@available(macOS 11.3, *)) {
+                encoder_spec[(__bridge NSString *)kVTVideoEncoderSpecification_EnableLowLatencyRateControl] = @YES;
+            }
+
+            CMVideoCodecType cm_codec = (actual_codec == 2) ? kCMVideoCodecType_HEVC : kCMVideoCodecType_H264;
+            OSStatus vt_err = VTCompressionSessionCreate(
+                kCFAllocatorDefault,
+                (int32_t)out_w,
+                (int32_t)out_h,
+                cm_codec,
+                (__bridge CFDictionaryRef)encoder_spec,
+                NULL,
+                kCFAllocatorDefault,
+                tl_vt_output_callback,
+                (__bridge void *)session,
+                &session->vt_session
+            );
+            if (vt_err != noErr || !session->vt_session) {
+                if (err_buf && err_buf_len > 0) {
+                    snprintf(err_buf, err_buf_len, "vt_create_failed:%d", (int)vt_err);
+                }
+                return NULL;
+            }
+
+            VTSessionSetProperty(session->vt_session, kVTCompressionPropertyKey_RealTime, kCFBooleanTrue);
+            VTSessionSetProperty(session->vt_session, kVTCompressionPropertyKey_AllowFrameReordering, kCFBooleanFalse);
+            CFStringRef profile = (actual_codec == 2) ? kVTProfileLevel_HEVC_Main_AutoLevel : kVTProfileLevel_H264_High_AutoLevel;
+            VTSessionSetProperty(session->vt_session, kVTCompressionPropertyKey_ProfileLevel, profile);
+
+            int32_t gop = (int32_t)(clamped_fps * 2);
+            CFNumberRef gop_num = CFNumberCreate(kCFAllocatorDefault, kCFNumberSInt32Type, &gop);
+            VTSessionSetProperty(session->vt_session, kVTCompressionPropertyKey_MaxKeyFrameInterval, gop_num);
+            CFRelease(gop_num);
+
+            int32_t fps_i32 = (int32_t)clamped_fps;
+            CFNumberRef fps_num = CFNumberCreate(kCFAllocatorDefault, kCFNumberSInt32Type, &fps_i32);
+            VTSessionSetProperty(session->vt_session, kVTCompressionPropertyKey_ExpectedFrameRate, fps_num);
+            CFRelease(fps_num);
+
+            int32_t avg_bps = (int32_t)(clamped_kbps * 1000);
+            CFNumberRef bps_num = CFNumberCreate(kCFAllocatorDefault, kCFNumberSInt32Type, &avg_bps);
+            VTSessionSetProperty(session->vt_session, kVTCompressionPropertyKey_AverageBitRate, bps_num);
+            CFRelease(bps_num);
+
+            int32_t bytes_per_sec = (int32_t)((clamped_kbps * 1000 / 8) * 3 / 2);
+            int32_t one_sec = 1;
+            CFNumberRef lim_bytes = CFNumberCreate(kCFAllocatorDefault, kCFNumberSInt32Type, &bytes_per_sec);
+            CFNumberRef lim_sec = CFNumberCreate(kCFAllocatorDefault, kCFNumberSInt32Type, &one_sec);
+            const void *lim_vals[2] = { lim_bytes, lim_sec };
+            CFArrayRef limits = CFArrayCreate(kCFAllocatorDefault, lim_vals, 2, &kCFTypeArrayCallBacks);
+            VTSessionSetProperty(session->vt_session, kVTCompressionPropertyKey_DataRateLimits, limits);
+            CFRelease(limits);
+            CFRelease(lim_bytes);
+            CFRelease(lim_sec);
+
+            VTCompressionSessionPrepareToEncodeFrames(session->vt_session);
         }
-
-        VTSessionSetProperty(session->vt_session, kVTCompressionPropertyKey_RealTime, kCFBooleanTrue);
-        VTSessionSetProperty(session->vt_session, kVTCompressionPropertyKey_AllowFrameReordering, kCFBooleanFalse);
-        CFStringRef profile = (actual_codec == 2) ? kVTProfileLevel_HEVC_Main_AutoLevel : kVTProfileLevel_H264_High_AutoLevel;
-        VTSessionSetProperty(session->vt_session, kVTCompressionPropertyKey_ProfileLevel, profile);
-
-        int32_t gop = (int32_t)(clamped_fps * 2);
-        CFNumberRef gop_num = CFNumberCreate(kCFAllocatorDefault, kCFNumberSInt32Type, &gop);
-        VTSessionSetProperty(session->vt_session, kVTCompressionPropertyKey_MaxKeyFrameInterval, gop_num);
-        CFRelease(gop_num);
-
-        int32_t fps_i32 = (int32_t)clamped_fps;
-        CFNumberRef fps_num = CFNumberCreate(kCFAllocatorDefault, kCFNumberSInt32Type, &fps_i32);
-        VTSessionSetProperty(session->vt_session, kVTCompressionPropertyKey_ExpectedFrameRate, fps_num);
-        CFRelease(fps_num);
-
-        int32_t avg_bps = (int32_t)(clamped_kbps * 1000);
-        CFNumberRef bps_num = CFNumberCreate(kCFAllocatorDefault, kCFNumberSInt32Type, &avg_bps);
-        VTSessionSetProperty(session->vt_session, kVTCompressionPropertyKey_AverageBitRate, bps_num);
-        CFRelease(bps_num);
-
-        int32_t bytes_per_sec = (int32_t)((clamped_kbps * 1000 / 8) * 3 / 2);
-        int32_t one_sec = 1;
-        CFNumberRef lim_bytes = CFNumberCreate(kCFAllocatorDefault, kCFNumberSInt32Type, &bytes_per_sec);
-        CFNumberRef lim_sec = CFNumberCreate(kCFAllocatorDefault, kCFNumberSInt32Type, &one_sec);
-        const void *lim_vals[2] = { lim_bytes, lim_sec };
-        CFArrayRef limits = CFArrayCreate(kCFAllocatorDefault, lim_vals, 2, &kCFTypeArrayCallBacks);
-        VTSessionSetProperty(session->vt_session, kVTCompressionPropertyKey_DataRateLimits, limits);
-        CFRelease(limits);
-        CFRelease(lim_bytes);
-        CFRelease(lim_sec);
-
-        VTCompressionSessionPrepareToEncodeFrames(session->vt_session);
 
         SCContentFilter *filter = [[SCContentFilter alloc] initWithDisplay:target excludingWindows:@[]];
         SCStreamConfiguration *cfg = [[SCStreamConfiguration alloc] init];
         cfg.width = out_w;
         cfg.height = out_h;
         cfg.minimumFrameInterval = CMTimeMake(1, (int32_t)clamped_fps);
-        cfg.pixelFormat = kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange;
+        cfg.pixelFormat = (actual_codec == 3)
+            ? kCVPixelFormatType_32BGRA
+            : kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange;
         cfg.showsCursor = show_cursor ? YES : NO;
         cfg.queueDepth = 3;
 
         SCStream *stream = [[SCStream alloc] initWithFilter:filter configuration:cfg delegate:session];
         NSError *add_err = nil;
         if (![stream addStreamOutput:session type:SCStreamOutputTypeScreen sampleHandlerQueue:session->sample_queue error:&add_err]) {
-            VTCompressionSessionInvalidate(session->vt_session);
-            CFRelease(session->vt_session);
-            session->vt_session = NULL;
+            if (session->vt_session) {
+                VTCompressionSessionInvalidate(session->vt_session);
+                CFRelease(session->vt_session);
+                session->vt_session = NULL;
+            }
+            if (session->jpeg_color_space) {
+                CFRelease(session->jpeg_color_space);
+                session->jpeg_color_space = NULL;
+            }
             if (err_buf && err_buf_len > 0) {
                 const char *msg = add_err ? add_err.localizedDescription.UTF8String : "add_output_failed";
                 strncpy(err_buf, msg ? msg : "add_output_failed", err_buf_len - 1);
@@ -537,9 +601,15 @@ void *tl_capture_start(
         }];
         if (dispatch_semaphore_wait(start_sem, dispatch_time(DISPATCH_TIME_NOW, 5 * NSEC_PER_SEC)) != 0 || start_err) {
             atomic_store(&session->stopped, 1);
-            VTCompressionSessionInvalidate(session->vt_session);
-            CFRelease(session->vt_session);
-            session->vt_session = NULL;
+            if (session->vt_session) {
+                VTCompressionSessionInvalidate(session->vt_session);
+                CFRelease(session->vt_session);
+                session->vt_session = NULL;
+            }
+            if (session->jpeg_color_space) {
+                CFRelease(session->jpeg_color_space);
+                session->jpeg_color_space = NULL;
+            }
             session->stream = nil;
             if (err_buf && err_buf_len > 0) {
                 const char *msg = start_err ? start_err.localizedDescription.UTF8String : "start_capture_timeout";
@@ -581,6 +651,11 @@ void tl_capture_stop(void *handle) {
                 CFRelease(session->vt_session);
                 session->vt_session = NULL;
             }
+            if (session->jpeg_color_space) {
+                CFRelease(session->jpeg_color_space);
+                session->jpeg_color_space = NULL;
+            }
+            session->ci_context = nil;
         });
         session->callback = NULL;
         session->user_data = NULL;
