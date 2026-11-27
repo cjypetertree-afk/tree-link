@@ -199,7 +199,7 @@
       object-fit: contain;
       display: block;
       user-select: none;
-      cursor: crosshair;
+      cursor: default;
     }
     .overlay {
       position: absolute;
@@ -264,8 +264,9 @@
         <span class="sub" id="contextHint">多 Mac 实时控屏 · 拖拽文件直传 · 剪贴板同步</span>
       </div>
       <div class="controls">
+        <button class="primary" id="httpsUpgradeBtn" style="display:none" title="切换到本地 HTTPS 以开启浏览器 WebCodecs 硬件 H.264 60fps（首次点高级→继续访问即可）">⚡ 极速 60fps H.264 模式 (HTTPS)</button>
         <input id="addName" placeholder="设备名 (如 Mac-2)" style="width:118px" />
-        <input id="addHost" placeholder="添加另一台 Mac IP:端口 (如 192.168.50.88:47474)" style="width:240px" />
+        <input id="addHost" placeholder="添加另一台 Mac IP:端口 (如 192.168.50.88)" style="width:228px" />
         <input id="addToken" placeholder="令牌(可留空)" style="width:92px" />
         <button class="primary" id="addBtn">+ 添加一台 Mac</button>
         <button id="btnSplitH" class="active">左右分屏</button>
@@ -316,9 +317,14 @@
       { id:'retina-4k', label:'原画 4K·30fps', w:3840, h:2400, fps:30, kbps:35000 },
     ];
     const hasWebCodecs = typeof VideoDecoder !== 'undefined';
+    const isHttps = location.protocol === 'https:';
+    const httpProto = isHttps ? 'https:' : 'http:';
+    const wsProto = isHttps ? 'wss:' : 'ws:';
+    const defaultPort = isHttps ? 47475 : 47474;
+    const httpsUpgradeBtn = document.getElementById('httpsUpgradeBtn');
     document.getElementById('contextHint').textContent = hasWebCodecs
-      ? 'WebCodecs 硬件 H.264/HEVC 已就绪 · 支持多 Mac 分屏、拖拽传文件、剪贴板互通'
-      : '局域网直连兼容模式 (Apple Silicon GPU JPEG 实时流) · 支持多 Mac 分屏、拖拽传文件、剪贴板互通';
+      ? '⚡ WebCodecs 硬件 H.264/HEVC 极速模式 · 零延迟本地光标 · 多 Mac 分屏'
+      : '局域网直连模式 (GPU JPEG 零排队) · 点右侧绿色按钮可切 60fps 硬件 H.264';
 
     let toastTimer = null;
     function showToast(msg) {
@@ -378,6 +384,7 @@
       let currentCodec = defaultCodec;
       let currentPreset = PRESETS[0].id;
       let currentDisplay = 0;
+      let showRemoteCursor = false;
       let swapCtrlCmd = true;
       let focused = false;
       let ws = null;
@@ -409,6 +416,7 @@
               <option value="jpeg"${defaultCodec === 'jpeg' ? ' selected' : ''}>GPU JPEG (免证书通用)</option>
               ${hasWebCodecs ? `<option value="h264" selected>H.264 硬件 60fps</option><option value="hevc">HEVC 硬件</option>` : ''}
             </select>
+            <button class="p-cursor active" title="隐藏视频流里的 Mac 光标，只保留 0ms 延迟的本地鼠标指针">零延迟光标</button>
             <button class="p-mod active" title="Ctrl 与 ⌘Command 互换">Ctrl→⌘</button>
             <button class="p-spot" title="发送 ⌘Space (Spotlight)">⌘Space</button>
             <button class="p-tab" title="发送 ⌘Tab (切换应用)">⌘Tab</button>
@@ -448,13 +456,16 @@
       const selDisplay = $('.p-display');
       const selPreset = $('.p-preset');
       const selCodec = $('.p-codec');
+      const btnCursor = $('.p-cursor');
       const btnMod = $('.p-mod');
       const ctrlBadge = $('.p-ctrl-badge');
       const axBar = $('.ax-bar');
       let axGranted = false;
       let permTimer = null;
       let pendingMove = null;
-      let moveRaf = 0;
+      let moveTimer = 0;
+      let lastMoveSent = 0;
+      const MOVE_INTERVAL_MS = 4; // 250 Hz ultra-responsive binary pointer stream
 
       function updatePermissionsUi(perms) {
         if (!perms) return;
@@ -475,9 +486,9 @@
         }
       }
 
-      const baseHttp = `http://${host}`;
+      const baseHttp = `${httpProto}//${host}`;
       const qsToken = token ? `?token=${encodeURIComponent(token)}` : '';
-      const wsUrl = `ws://${host}/ws${qsToken}`;
+      const wsUrl = `${wsProto}//${host}/ws${qsToken}`;
 
       function setState(state, title, msg) {
         dot.className = `dot ${state}`;
@@ -500,6 +511,74 @@
         sendJson({ type: 'input', event: ev });
       }
 
+      function sendBinMove(pt) {
+        if (!ws || ws.readyState !== WebSocket.OPEN) return;
+        const buf = new ArrayBuffer(14);
+        const dv = new DataView(buf);
+        dv.setUint8(0, 0x49);
+        dv.setUint8(1, 0x01);
+        dv.setUint32(2, currentDisplay >>> 0, false);
+        dv.setFloat32(6, pt.nx, false);
+        dv.setFloat32(10, pt.ny, false);
+        ws.send(buf);
+        lastMoveSent = performance.now();
+      }
+
+      function sendBinButton(pt, btnId, pressed) {
+        if (!ws || ws.readyState !== WebSocket.OPEN) return;
+        if (moveTimer) { clearTimeout(moveTimer); moveTimer = 0; }
+        pendingMove = null;
+        const buf = new ArrayBuffer(16);
+        const dv = new DataView(buf);
+        dv.setUint8(0, 0x49);
+        dv.setUint8(1, 0x02);
+        dv.setUint8(2, btnId & 0xff);
+        dv.setUint8(3, pressed ? 1 : 0);
+        dv.setUint32(4, currentDisplay >>> 0, false);
+        dv.setFloat32(8, pt.nx, false);
+        dv.setFloat32(12, pt.ny, false);
+        ws.send(buf);
+        lastMoveSent = performance.now();
+      }
+
+      function sendBinScroll(pt, dx, dy, pixel) {
+        if (!ws || ws.readyState !== WebSocket.OPEN) return;
+        const buf = new ArrayBuffer(24);
+        const dv = new DataView(buf);
+        dv.setUint8(0, 0x49);
+        dv.setUint8(1, 0x03);
+        dv.setUint8(2, pixel ? 1 : 0);
+        dv.setUint8(3, 0);
+        dv.setUint32(4, currentDisplay >>> 0, false);
+        dv.setFloat32(8, pt.nx, false);
+        dv.setFloat32(12, pt.ny, false);
+        dv.setFloat32(16, dx, false);
+        dv.setFloat32(20, dy, false);
+        ws.send(buf);
+      }
+
+      function queueMove(pt) {
+        const now = performance.now();
+        const elapsed = now - lastMoveSent;
+        if (elapsed >= MOVE_INTERVAL_MS) {
+          if (moveTimer) { clearTimeout(moveTimer); moveTimer = 0; }
+          pendingMove = null;
+          sendBinMove(pt);
+        } else {
+          pendingMove = pt;
+          if (!moveTimer) {
+            moveTimer = setTimeout(() => {
+              moveTimer = 0;
+              if (pendingMove) {
+                const p = pendingMove;
+                pendingMove = null;
+                sendBinMove(p);
+              }
+            }, Math.max(1, Math.ceil(MOVE_INTERVAL_MS - elapsed)));
+          }
+        }
+      }
+
       function subscribe() {
         const p = PRESETS.find(x => x.id === currentPreset) || PRESETS[0];
         awaitingKey = true;
@@ -511,7 +590,7 @@
           fps: p.fps,
           bitrateKbps: p.kbps,
           codec: currentCodec,
-          showCursor: true,
+          showCursor: showRemoteCursor,
         });
       }
 
@@ -565,6 +644,12 @@
               const m = JSON.parse(ev.data);
               if (m.type === 'hello') {
                 if (m.device_name) $('.p-name').textContent = name || m.device_name;
+                if (!hasWebCodecs && m.tls_port && host === location.host) {
+                  httpsUpgradeBtn.style.display = '';
+                  httpsUpgradeBtn.onclick = () => {
+                    location.href = `https://${location.hostname}:${m.tls_port}/${location.search}`;
+                  };
+                }
                 const list = m.displays || [];
                 if (list.length > 0) {
                   selDisplay.innerHTML = list.map(d =>
@@ -653,7 +738,8 @@
         clearInterval(pingTimer);
         clearInterval(permTimer);
         permTimer = null;
-        if (moveRaf) { cancelAnimationFrame(moveRaf); moveRaf = 0; }
+        if (moveTimer) { clearTimeout(moveTimer); moveTimer = 0; }
+        pendingMove = null;
         if (ws) {
           try {
             if (ws.readyState === WebSocket.OPEN) {
@@ -680,6 +766,12 @@
       selDisplay.onchange = () => { currentDisplay = Number(selDisplay.value); subscribe(); };
       selPreset.onchange = () => { currentPreset = selPreset.value; subscribe(); };
       selCodec.onchange = () => { currentCodec = selCodec.value; subscribe(); };
+      btnCursor.onclick = () => {
+        showRemoteCursor = !showRemoteCursor;
+        btnCursor.textContent = showRemoteCursor ? '显示Mac光标' : '零延迟光标';
+        btnCursor.classList.toggle('active', !showRemoteCursor);
+        subscribe();
+      };
       btnMod.onclick = () => {
         swapCtrlCmd = !swapCtrlCmd;
         btnMod.textContent = swapCtrlCmd ? 'Ctrl→⌘' : 'Win→⌘';
@@ -777,17 +869,7 @@
       canvas.onpointermove = (e) => {
         const pt = norm(e);
         if (!pt) return;
-        pendingMove = pt;
-        if (!moveRaf) {
-          moveRaf = requestAnimationFrame(() => {
-            moveRaf = 0;
-            if (pendingMove) {
-              const p = pendingMove;
-              pendingMove = null;
-              sendInput({ kind:'pointer_move', display_id:currentDisplay, nx:p.nx, ny:p.ny });
-            }
-          });
-        }
+        queueMove(pt);
       };
       canvas.onpointerdown = (e) => {
         stage.focus();
@@ -795,19 +877,19 @@
         if (!pt || !button) return;
         e.preventDefault();
         canvas.setPointerCapture?.(e.pointerId);
-        sendInput({ kind:'pointer_button', display_id:currentDisplay, nx:pt.nx, ny:pt.ny, button, pressed:true });
+        sendBinButton(pt, e.button, true);
       };
       canvas.onpointerup = (e) => {
         const pt = norm(e), button = MOUSE_MAP[e.button];
         if (!pt || !button) return;
         e.preventDefault();
-        sendInput({ kind:'pointer_button', display_id:currentDisplay, nx:pt.nx, ny:pt.ny, button, pressed:false });
+        sendBinButton(pt, e.button, false);
       };
       canvas.onwheel = (e) => {
         const pt = norm(e);
         if (!pt) return;
         e.preventDefault();
-        sendInput({ kind:'scroll', display_id:currentDisplay, nx:pt.nx, ny:pt.ny, dx:-e.deltaX, dy:-e.deltaY, pixel:e.deltaMode===0 });
+        sendBinScroll(pt, -e.deltaX, -e.deltaY, e.deltaMode === 0);
       };
 
       // Drag & drop files straight onto the Mac screen to transfer them!
@@ -837,7 +919,7 @@
     document.getElementById('addBtn').onclick = () => {
       const rawHost = document.getElementById('addHost').value.trim();
       if (!rawHost) return;
-      const host = rawHost.includes(':') ? rawHost : `${rawHost}:47474`;
+      const host = rawHost.includes(':') ? rawHost : `${rawHost}:${defaultPort}`;
       const name = document.getElementById('addName').value.trim();
       const token = document.getElementById('addToken').value.trim();
       createPane({ name, host, token });

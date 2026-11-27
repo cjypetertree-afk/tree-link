@@ -73,6 +73,59 @@ export interface ParsedVideoFrame {
 
 export const VIDEO_FRAME_MAGIC = 0x54;
 export const VIDEO_HEADER_LEN = 20;
+export const INPUT_FRAME_MAGIC = 0x49;
+
+export function encodeBinaryPointerMove(displayId: number, nx: number, ny: number): ArrayBuffer {
+  const buf = new ArrayBuffer(14);
+  const dv = new DataView(buf);
+  dv.setUint8(0, INPUT_FRAME_MAGIC);
+  dv.setUint8(1, 0x01);
+  dv.setUint32(2, displayId >>> 0, false);
+  dv.setFloat32(6, nx, false);
+  dv.setFloat32(10, ny, false);
+  return buf;
+}
+
+export function encodeBinaryPointerButton(
+  displayId: number,
+  nx: number,
+  ny: number,
+  buttonId: number,
+  pressed: boolean,
+): ArrayBuffer {
+  const buf = new ArrayBuffer(16);
+  const dv = new DataView(buf);
+  dv.setUint8(0, INPUT_FRAME_MAGIC);
+  dv.setUint8(1, 0x02);
+  dv.setUint8(2, buttonId & 0xff);
+  dv.setUint8(3, pressed ? 1 : 0);
+  dv.setUint32(4, displayId >>> 0, false);
+  dv.setFloat32(8, nx, false);
+  dv.setFloat32(12, ny, false);
+  return buf;
+}
+
+export function encodeBinaryScroll(
+  displayId: number,
+  nx: number,
+  ny: number,
+  dx: number,
+  dy: number,
+  pixel: boolean,
+): ArrayBuffer {
+  const buf = new ArrayBuffer(24);
+  const dv = new DataView(buf);
+  dv.setUint8(0, INPUT_FRAME_MAGIC);
+  dv.setUint8(1, 0x03);
+  dv.setUint8(2, pixel ? 1 : 0);
+  dv.setUint8(3, 0);
+  dv.setUint32(4, displayId >>> 0, false);
+  dv.setFloat32(8, nx, false);
+  dv.setFloat32(12, ny, false);
+  dv.setFloat32(16, dx, false);
+  dv.setFloat32(20, dy, false);
+  return buf;
+}
 
 export function parseVideoFrame(buffer: ArrayBuffer): ParsedVideoFrame | null {
   if (buffer.byteLength < VIDEO_HEADER_LEN) return null;

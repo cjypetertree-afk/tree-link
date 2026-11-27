@@ -140,6 +140,7 @@ size_t tl_list_displays(TLDisplayInfo *out_buf, size_t max_count) {
 @public
     _Atomic int stopped;
     _Atomic int force_keyframe;
+    _Atomic int encode_in_flight;
     uint32_t display_id;
     uint16_t enc_width;
     uint16_t enc_height;
@@ -315,6 +316,12 @@ static void tl_vt_output_callback(
         return;
     }
 
+    int expected = 0;
+    if (!atomic_compare_exchange_strong(&self->encode_in_flight, &expected, 1)) {
+        // Drop incoming frame immediately while previous encode is still running to prevent queue lag.
+        return;
+    }
+
     CMTime pts = CMSampleBufferGetPresentationTimeStamp(sampleBuffer);
     CMTime dur = CMSampleBufferGetDuration(sampleBuffer);
     CVPixelBufferRetain(image_buf);
@@ -378,6 +385,7 @@ static void tl_vt_output_callback(
             }
         }
         CVPixelBufferRelease(image_buf);
+        atomic_store(&self->encode_in_flight, 0);
     });
 }
 
@@ -483,11 +491,12 @@ void *tl_capture_start(
         TLCaptureSession *session = [[TLCaptureSession alloc] init];
         atomic_init(&session->stopped, 0);
         atomic_init(&session->force_keyframe, 1);
+        atomic_init(&session->encode_in_flight, 0);
         session->display_id = actual_id;
         session->enc_width = out_w;
         session->enc_height = out_h;
         session->codec_id = actual_codec;
-        session->jpeg_quality = clamped_kbps >= 25000 ? 0.84f : (clamped_kbps >= 12000 ? 0.74f : 0.62f);
+        session->jpeg_quality = clamped_kbps >= 25000 ? 0.78f : (clamped_kbps >= 12000 ? 0.65f : 0.52f);
         session->callback = callback;
         session->user_data = user_data;
         session->sample_queue = dispatch_queue_create("com.treelink.screen.sample", DISPATCH_QUEUE_SERIAL);
@@ -574,7 +583,7 @@ void *tl_capture_start(
             ? kCVPixelFormatType_32BGRA
             : kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange;
         cfg.showsCursor = show_cursor ? YES : NO;
-        cfg.queueDepth = 3;
+        cfg.queueDepth = 2;
 
         SCStream *stream = [[SCStream alloc] initWithFilter:filter configuration:cfg delegate:session];
         NSError *add_err = nil;

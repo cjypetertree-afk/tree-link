@@ -3,6 +3,9 @@ import { Button } from 'oink-ui';
 import { domCodeToHid, HID_LEFT_GUI, HID_SPACE, HID_TAB, type ModifierPreset } from './hidKeymap';
 import {
   buildWebSocketUrl,
+  encodeBinaryPointerButton,
+  encodeBinaryPointerMove,
+  encodeBinaryScroll,
   linkClassLabel,
   parseVideoFrame,
   QUALITY_PRESETS,
@@ -49,6 +52,9 @@ export function RemotePane({ target, speakerMuted, onToggleAudioMute, onClose }:
   const decoderCodecRef = useRef<string>('');
   const awaitingKeyframeRef = useRef<boolean>(true);
   const jpegBusyRef = useRef<boolean>(false);
+  const moveTimerRef = useRef<number>(0);
+  const lastMoveSentRef = useRef<number>(0);
+  const pendingMoveRef = useRef<{ nx: number; ny: number } | null>(null);
   const frameSizeRef = useRef<{ w: number; h: number }>({ w: 1920, h: 1080 });
   const fpsCounterRef = useRef<{ frames: number; lastMs: number }>({ frames: 0, lastMs: performance.now() });
 
@@ -59,6 +65,7 @@ export function RemotePane({ target, speakerMuted, onToggleAudioMute, onClose }:
   const [displayId, setDisplayId] = useState<number>(0);
   const [presetId, setPresetId] = useState<string>(QUALITY_PRESETS[0].id);
   const [codec, setCodec] = useState<VideoCodec>(() => (typeof VideoDecoder !== 'undefined' ? 'h264' : 'jpeg'));
+  const [showRemoteCursor, setShowRemoteCursor] = useState<boolean>(false);
   const [modPreset, setModPreset] = useState<ModifierPreset>('ctrl_as_cmd');
   const [focused, setFocused] = useState<boolean>(false);
   const [rttMs, setRttMs] = useState<number | null>(null);
@@ -73,7 +80,12 @@ export function RemotePane({ target, speakerMuted, onToggleAudioMute, onClose }:
     }
   }, []);
 
-  const subscribeStream = useCallback((nextDisplayId: number, nextPresetId: string, nextCodec: VideoCodec) => {
+  const subscribeStream = useCallback((
+    nextDisplayId: number,
+    nextPresetId: string,
+    nextCodec: VideoCodec,
+    nextShowCursor: boolean,
+  ) => {
     const preset = QUALITY_PRESETS.find(p => p.id === nextPresetId) ?? QUALITY_PRESETS[0];
     awaitingKeyframeRef.current = true;
     sendJson({
@@ -84,7 +96,7 @@ export function RemotePane({ target, speakerMuted, onToggleAudioMute, onClose }:
       fps: preset.fps,
       bitrateKbps: preset.bitrateKbps,
       codec: nextCodec,
-      showCursor: true,
+      showCursor: nextShowCursor,
     });
   }, [sendJson]);
 
@@ -182,7 +194,7 @@ export function RemotePane({ target, speakerMuted, onToggleAudioMute, onClose }:
             if (perms && typeof perms.accessibility === 'boolean') {
               setAxGranted(perms.accessibility);
             }
-            subscribeStream(primary, presetId, codec);
+            subscribeStream(primary, presetId, codec, showRemoteCursor);
           } else if (msg.type === 'permissions') {
             const perms = msg.permissions as { accessibility?: boolean } | undefined;
             if (perms && typeof perms.accessibility === 'boolean') {
@@ -278,6 +290,11 @@ export function RemotePane({ target, speakerMuted, onToggleAudioMute, onClose }:
 
     return () => {
       window.clearInterval(pingTimer);
+      if (moveTimerRef.current) {
+        window.clearTimeout(moveTimerRef.current);
+        moveTimerRef.current = 0;
+      }
+      pendingMoveRef.current = null;
       try {
         if (ws.readyState === WebSocket.OPEN) {
           ws.send(JSON.stringify({ type: 'input', event: { kind: 'release_all' } }));
@@ -305,6 +322,57 @@ export function RemotePane({ target, speakerMuted, onToggleAudioMute, onClose }:
 
   const sendInput = (event: Record<string, unknown>) => {
     sendJson({ type: 'input', event });
+  };
+
+  const sendBinaryMove = (nx: number, ny: number) => {
+    const ws = wsRef.current;
+    if (ws && ws.readyState === WebSocket.OPEN) {
+      ws.send(encodeBinaryPointerMove(displayId, nx, ny));
+      lastMoveSentRef.current = performance.now();
+    }
+  };
+
+  const queuePointerMove = (nx: number, ny: number) => {
+    const now = performance.now();
+    const elapsed = now - lastMoveSentRef.current;
+    if (elapsed >= 4) {
+      if (moveTimerRef.current) {
+        window.clearTimeout(moveTimerRef.current);
+        moveTimerRef.current = 0;
+      }
+      pendingMoveRef.current = null;
+      sendBinaryMove(nx, ny);
+    } else {
+      pendingMoveRef.current = { nx, ny };
+      if (!moveTimerRef.current) {
+        moveTimerRef.current = window.setTimeout(() => {
+          moveTimerRef.current = 0;
+          const pt = pendingMoveRef.current;
+          pendingMoveRef.current = null;
+          if (pt) sendBinaryMove(pt.nx, pt.ny);
+        }, Math.max(1, Math.ceil(4 - elapsed)));
+      }
+    }
+  };
+
+  const sendBinaryButton = (nx: number, ny: number, buttonId: number, pressed: boolean) => {
+    const ws = wsRef.current;
+    if (moveTimerRef.current) {
+      window.clearTimeout(moveTimerRef.current);
+      moveTimerRef.current = 0;
+    }
+    pendingMoveRef.current = null;
+    if (ws && ws.readyState === WebSocket.OPEN) {
+      ws.send(encodeBinaryPointerButton(displayId, nx, ny, buttonId, pressed));
+      lastMoveSentRef.current = performance.now();
+    }
+  };
+
+  const sendBinaryWheel = (nx: number, ny: number, dx: number, dy: number, pixel: boolean) => {
+    const ws = wsRef.current;
+    if (ws && ws.readyState === WebSocket.OPEN) {
+      ws.send(encodeBinaryScroll(displayId, nx, ny, dx, dy, pixel));
+    }
   };
 
   const sendChord = (codes: number[]) => {
@@ -348,7 +416,7 @@ export function RemotePane({ target, speakerMuted, onToggleAudioMute, onClose }:
               onChange={(e) => {
                 const next = Number(e.target.value);
                 setDisplayId(next);
-                subscribeStream(next, presetId, codec);
+                subscribeStream(next, presetId, codec, showRemoteCursor);
               }}
             >
               {displays.map((d) => (
@@ -365,7 +433,7 @@ export function RemotePane({ target, speakerMuted, onToggleAudioMute, onClose }:
             onChange={(e) => {
               const next = e.target.value;
               setPresetId(next);
-              subscribeStream(displayId, next, codec);
+              subscribeStream(displayId, next, codec, showRemoteCursor);
             }}
           >
             {QUALITY_PRESETS.map((p) => (
@@ -379,13 +447,25 @@ export function RemotePane({ target, speakerMuted, onToggleAudioMute, onClose }:
             onChange={(e) => {
               const next = e.target.value as VideoCodec;
               setCodec(next);
-              subscribeStream(displayId, presetId, next);
+              subscribeStream(displayId, presetId, next, showRemoteCursor);
             }}
           >
             <option value="h264">H.264</option>
             <option value="hevc">HEVC</option>
             <option value="jpeg">GPU JPEG</option>
           </select>
+          <Button
+            size="sm"
+            variant="ghost"
+            title="隐藏视频流里的 Mac 光标，只保留 0ms 延迟的本地鼠标指针"
+            onClick={() => {
+              const next = !showRemoteCursor;
+              setShowRemoteCursor(next);
+              subscribeStream(displayId, presetId, codec, next);
+            }}
+          >
+            {showRemoteCursor ? '显示Mac光标' : '零延迟光标'}
+          </Button>
           <Button
             size="sm"
             variant="ghost"
@@ -443,7 +523,7 @@ export function RemotePane({ target, speakerMuted, onToggleAudioMute, onClose }:
           onPointerMove={(e) => {
             const pt = normalizedCoords(e.clientX, e.clientY);
             if (!pt) return;
-            sendInput({ kind: 'pointer_move', display_id: displayId, nx: pt.nx, ny: pt.ny });
+            queuePointerMove(pt.nx, pt.ny);
           }}
           onPointerDown={(e) => {
             stageRef.current?.querySelector<HTMLElement>('.tl-pane__stage')?.focus();
@@ -452,28 +532,20 @@ export function RemotePane({ target, speakerMuted, onToggleAudioMute, onClose }:
             if (!pt || !button) return;
             e.preventDefault();
             e.currentTarget.setPointerCapture?.(e.pointerId);
-            sendInput({ kind: 'pointer_button', display_id: displayId, nx: pt.nx, ny: pt.ny, button, pressed: true });
+            sendBinaryButton(pt.nx, pt.ny, e.button, true);
           }}
           onPointerUp={(e) => {
             const pt = normalizedCoords(e.clientX, e.clientY);
             const button = MOUSE_BUTTON_MAP[e.button];
             if (!pt || !button) return;
             e.preventDefault();
-            sendInput({ kind: 'pointer_button', display_id: displayId, nx: pt.nx, ny: pt.ny, button, pressed: false });
+            sendBinaryButton(pt.nx, pt.ny, e.button, false);
           }}
           onWheel={(e) => {
             const pt = normalizedCoords(e.clientX, e.clientY);
             if (!pt) return;
             e.preventDefault();
-            sendInput({
-              kind: 'scroll',
-              display_id: displayId,
-              nx: pt.nx,
-              ny: pt.ny,
-              dx: -e.deltaX,
-              dy: -e.deltaY,
-              pixel: e.deltaMode === 0,
-            });
+            sendBinaryWheel(pt.nx, pt.ny, -e.deltaX, -e.deltaY, e.deltaMode === 0);
           }}
         />
         {status !== 'streaming' && (

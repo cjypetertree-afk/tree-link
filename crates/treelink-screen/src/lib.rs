@@ -40,9 +40,10 @@ pub use platform::{
     request_screen_recording_permission,
 };
 pub use protocol::{
-    ClientMsg, DEFAULT_SCREEN_PORT, DisplayDescriptor, EncodedVideoFrame, LinkClass, LinkInterfaceInfo,
-    MouseButtonKind, PermissionSummary, RemoteInputEvent, ServerMsg, StreamConfig, VIDEO_FRAME_MAGIC, VIDEO_HEADER_LEN,
-    VideoCodec, decode_video_frame, encode_video_frame,
+    ClientMsg, DEFAULT_SCREEN_PORT, DisplayDescriptor, EncodedVideoFrame, INPUT_FRAME_MAGIC, LinkClass,
+    LinkInterfaceInfo, MouseButtonKind, PermissionSummary, RemoteInputEvent, ServerMsg, StreamConfig,
+    VIDEO_FRAME_MAGIC, VIDEO_HEADER_LEN, VideoCodec, decode_binary_input, decode_video_frame, encode_binary_input,
+    encode_video_frame,
 };
 pub use server::{HostStatus, ScreenServer, ServerConfig};
 

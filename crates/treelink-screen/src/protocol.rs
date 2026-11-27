@@ -7,6 +7,8 @@ pub const DEFAULT_SCREEN_PORT: u16 = 47474;
 
 /// Magic byte identifying binary TREE LINK video packets (`'T'`).
 pub const VIDEO_FRAME_MAGIC: u8 = 0x54;
+/// Magic byte identifying compact binary client-to-host input packets (`'I'`).
+pub const INPUT_FRAME_MAGIC: u8 = 0x49;
 /// Fixed header size for binary video frames in bytes.
 /// Layout:
 /// - `[0]`: magic (`0x54`)
@@ -210,6 +212,8 @@ pub enum ServerMsg {
         displays: Vec<DisplayDescriptor>,
         interfaces: Vec<LinkInterfaceInfo>,
         codecs: Vec<VideoCodec>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        tls_port: Option<u16>,
     },
     Displays {
         displays: Vec<DisplayDescriptor>,
@@ -288,6 +292,124 @@ pub fn decode_video_frame(bytes: &[u8]) -> Option<(EncodedVideoFrame, usize)> {
     ))
 }
 
+/// Encode a compact binary input packet for ultra-low-latency pointer/scroll delivery.
+///
+/// Layout:
+/// - `PointerMove` (14 B): `[0x49, 0x01, display_id: u32 BE, nx: f32 BE, ny: f32 BE]`
+/// - `PointerButton` (16 B): `[0x49, 0x02, btn: u8, pressed: u8, display_id: u32 BE, nx: f32 BE, ny: f32 BE]`
+/// - `Scroll` (24 B): `[0x49, 0x03, pixel: u8, 0, display_id: u32 BE, nx: f32 BE, ny: f32 BE, dx: f32 BE, dy: f32 BE]`
+pub fn encode_binary_input(event: &RemoteInputEvent) -> Option<Vec<u8>> {
+    match *event {
+        RemoteInputEvent::PointerMove { display_id, nx, ny } => {
+            let mut out = Vec::with_capacity(14);
+            out.push(INPUT_FRAME_MAGIC);
+            out.push(0x01);
+            out.extend_from_slice(&display_id.to_be_bytes());
+            out.extend_from_slice(&(nx as f32).to_be_bytes());
+            out.extend_from_slice(&(ny as f32).to_be_bytes());
+            Some(out)
+        }
+        RemoteInputEvent::PointerButton {
+            display_id,
+            nx,
+            ny,
+            button,
+            pressed,
+        } => {
+            let btn = match button {
+                MouseButtonKind::Left => 0u8,
+                MouseButtonKind::Middle => 1,
+                MouseButtonKind::Right => 2,
+                MouseButtonKind::Back => 3,
+                MouseButtonKind::Forward => 4,
+            };
+            let mut out = Vec::with_capacity(16);
+            out.push(INPUT_FRAME_MAGIC);
+            out.push(0x02);
+            out.push(btn);
+            out.push(u8::from(pressed));
+            out.extend_from_slice(&display_id.to_be_bytes());
+            out.extend_from_slice(&(nx as f32).to_be_bytes());
+            out.extend_from_slice(&(ny as f32).to_be_bytes());
+            Some(out)
+        }
+        RemoteInputEvent::Scroll {
+            display_id,
+            nx,
+            ny,
+            dx,
+            dy,
+            pixel,
+        } => {
+            let mut out = Vec::with_capacity(24);
+            out.push(INPUT_FRAME_MAGIC);
+            out.push(0x03);
+            out.push(u8::from(pixel));
+            out.push(0);
+            out.extend_from_slice(&display_id.to_be_bytes());
+            out.extend_from_slice(&(nx as f32).to_be_bytes());
+            out.extend_from_slice(&(ny as f32).to_be_bytes());
+            out.extend_from_slice(&(dx as f32).to_be_bytes());
+            out.extend_from_slice(&(dy as f32).to_be_bytes());
+            Some(out)
+        }
+        _ => None,
+    }
+}
+
+/// Decode a compact binary client-to-host input packet (`magic == 0x49`).
+pub fn decode_binary_input(bytes: &[u8]) -> Option<RemoteInputEvent> {
+    if bytes.len() < 2 || bytes[0] != INPUT_FRAME_MAGIC {
+        return None;
+    }
+    match bytes[1] {
+        0x01 if bytes.len() == 14 => {
+            let display_id = u32::from_be_bytes(bytes[2..6].try_into().ok()?);
+            let nx = f64::from(f32::from_be_bytes(bytes[6..10].try_into().ok()?));
+            let ny = f64::from(f32::from_be_bytes(bytes[10..14].try_into().ok()?));
+            Some(RemoteInputEvent::PointerMove { display_id, nx, ny })
+        }
+        0x02 if bytes.len() == 16 => {
+            let button = match bytes[2] {
+                0 => MouseButtonKind::Left,
+                1 => MouseButtonKind::Middle,
+                2 => MouseButtonKind::Right,
+                3 => MouseButtonKind::Back,
+                4 => MouseButtonKind::Forward,
+                _ => return None,
+            };
+            let pressed = bytes[3] != 0;
+            let display_id = u32::from_be_bytes(bytes[4..8].try_into().ok()?);
+            let nx = f64::from(f32::from_be_bytes(bytes[8..12].try_into().ok()?));
+            let ny = f64::from(f32::from_be_bytes(bytes[12..16].try_into().ok()?));
+            Some(RemoteInputEvent::PointerButton {
+                display_id,
+                nx,
+                ny,
+                button,
+                pressed,
+            })
+        }
+        0x03 if bytes.len() == 24 => {
+            let pixel = bytes[2] != 0;
+            let display_id = u32::from_be_bytes(bytes[4..8].try_into().ok()?);
+            let nx = f64::from(f32::from_be_bytes(bytes[8..12].try_into().ok()?));
+            let ny = f64::from(f32::from_be_bytes(bytes[12..16].try_into().ok()?));
+            let dx = f64::from(f32::from_be_bytes(bytes[16..20].try_into().ok()?));
+            let dy = f64::from(f32::from_be_bytes(bytes[20..24].try_into().ok()?));
+            Some(RemoteInputEvent::Scroll {
+                display_id,
+                nx,
+                ny,
+                dx,
+                dy,
+                pixel,
+            })
+        }
+        _ => None,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -308,6 +430,41 @@ mod tests {
         let (decoded, payload_len) = decode_video_frame(&wire).expect("valid frame");
         assert_eq!(payload_len, frame.payload.len());
         assert_eq!(decoded, frame);
+    }
+
+    #[test]
+    fn binary_input_roundtrip() {
+        let mv = RemoteInputEvent::PointerMove {
+            display_id: 7,
+            nx: 0.25,
+            ny: 0.75,
+        };
+        let wire = encode_binary_input(&mv).unwrap();
+        assert_eq!(wire.len(), 14);
+        assert_eq!(decode_binary_input(&wire), Some(mv));
+
+        let btn = RemoteInputEvent::PointerButton {
+            display_id: 7,
+            nx: 0.5,
+            ny: 0.5,
+            button: MouseButtonKind::Right,
+            pressed: true,
+        };
+        let bwire = encode_binary_input(&btn).unwrap();
+        assert_eq!(bwire.len(), 16);
+        assert_eq!(decode_binary_input(&bwire), Some(btn));
+
+        let scr = RemoteInputEvent::Scroll {
+            display_id: 7,
+            nx: 0.5,
+            ny: 0.25,
+            dx: -12.5,
+            dy: 24.0,
+            pixel: true,
+        };
+        let swire = encode_binary_input(&scr).unwrap();
+        assert_eq!(swire.len(), 24);
+        assert_eq!(decode_binary_input(&swire), Some(scr));
     }
 
     #[test]

@@ -267,7 +267,7 @@
   width: auto;
   height: auto;
   object-fit: contain;
-  cursor: crosshair;
+  cursor: default;
   user-select: none;
   display: block;
 }

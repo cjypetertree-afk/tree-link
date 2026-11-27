@@ -7,15 +7,15 @@ use std::sync::{
 };
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use tokio::io::AsyncWriteExt;
-use tokio::net::{TcpListener, TcpStream};
-use tokio::sync::{mpsc, watch};
+use tokio::io::{AsyncRead, AsyncWrite, AsyncWriteExt};
+use tokio::net::TcpListener;
+use tokio::sync::{Notify, mpsc, watch};
 
 use crate::network_rank::rank_local_interfaces;
 use crate::platform::{CaptureHandle, InputInjector};
 use crate::protocol::{
     ClientMsg, DEFAULT_SCREEN_PORT, EncodedVideoFrame, PermissionSummary, ServerMsg, StreamConfig, VideoCodec,
-    encode_video_frame,
+    decode_binary_input, encode_video_frame,
 };
 use crate::ws::{
     WsMessage, complete_ws_handshake, read_http_body, read_http_handshake, read_ws_message, write_http_response,
@@ -27,8 +27,57 @@ const VIEWER_HTML: &str = include_str!("viewer.html");
 const MAX_CLIPBOARD_BYTES: usize = 1024 * 1024;
 const MAX_UPLOAD_BYTES: usize = 64 * 1024 * 1024;
 
-/// Maximum queued encoded video frames per viewer before dropping stale deltas to protect latency.
-const MAX_QUEUED_VIDEO_FRAMES: usize = 4;
+/// Maximum queued encoded delta video frames per viewer (H.264/HEVC) before dropping stale frames.
+const MAX_QUEUED_VIDEO_FRAMES: usize = 2;
+
+/// Zero-queue mailbox for full-frame JPEG: newer frames overwrite unsent frames so latency never stacks.
+#[derive(Default)]
+struct LatestFrameSlot {
+    frame: Mutex<Option<Vec<u8>>>,
+    notify: Notify,
+}
+
+impl LatestFrameSlot {
+    fn put(&self, bytes: Vec<u8>) {
+        *self.frame.lock().unwrap_or_else(|e| e.into_inner()) = Some(bytes);
+        self.notify.notify_one();
+    }
+
+    fn take(&self) -> Option<Vec<u8>> {
+        self.frame.lock().unwrap_or_else(|e| e.into_inner()).take()
+    }
+}
+
+fn build_self_signed_tls_acceptor() -> Option<tokio_rustls::TlsAcceptor> {
+    let mut sans = vec![
+        "localhost".to_string(),
+        "127.0.0.1".to_string(),
+        "::1".to_string(),
+    ];
+    for iface in rank_local_interfaces() {
+        if !sans.contains(&iface.ip) {
+            sans.push(iface.ip);
+        }
+    }
+    let mut params = rcgen::CertificateParams::new(sans).ok()?;
+    params
+        .distinguished_name
+        .push(rcgen::DnType::CommonName, "TREE LINK LAN Host");
+    let kp = rcgen::KeyPair::generate_for(&rcgen::PKCS_ECDSA_P256_SHA256).ok()?;
+    let cert = params.self_signed(&kp).ok()?;
+    let cert_der = rustls::pki_types::CertificateDer::from(cert.der().to_vec());
+    let key_der = rustls::pki_types::PrivateKeyDer::Pkcs8(rustls::pki_types::PrivatePkcs8KeyDer::from(
+        kp.serialize_der(),
+    ));
+    let provider = Arc::new(rustls::crypto::ring::default_provider());
+    let server_cfg = rustls::ServerConfig::builder_with_provider(provider)
+        .with_safe_default_protocol_versions()
+        .ok()?
+        .with_no_client_auth()
+        .with_single_cert(vec![cert_der], key_der)
+        .ok()?;
+    Some(tokio_rustls::TlsAcceptor::from(Arc::new(server_cfg)))
+}
 
 #[derive(Clone, Debug)]
 pub struct ServerConfig {
@@ -62,24 +111,28 @@ pub struct HostStatus {
 
 pub struct ScreenServer {
     local_addr: SocketAddr,
+    tls_addr: Option<SocketAddr>,
     active_viewers: Arc<AtomicUsize>,
     auth_token: Arc<Mutex<String>>,
     stop_tx: watch::Sender<bool>,
     task: Mutex<Option<tokio::task::JoinHandle<()>>>,
+    tls_task: Mutex<Option<tokio::task::JoinHandle<()>>>,
 }
 
 impl std::fmt::Debug for ScreenServer {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("ScreenServer")
             .field("local_addr", &self.local_addr)
+            .field("tls_addr", &self.tls_addr)
             .field("active_viewers", &self.active_viewers.load(Ordering::Relaxed))
             .finish_non_exhaustive()
     }
 }
 
 impl ScreenServer {
-    /// Start the TREE LINK screen server. If the requested port is busy, falls back to an
-    /// OS-assigned ephemeral port so startup never breaks the host agent.
+    /// Start the TREE LINK screen server (HTTP/WS + companion self-signed HTTPS/WSS on `port + 1`
+    /// so LAN browsers get `window.isSecureContext` and WebCodecs 60fps Hardware H.264/HEVC).
+    /// If the requested port is busy, falls back to an OS-assigned ephemeral port.
     pub async fn start(config: ServerConfig) -> std::io::Result<Self> {
         let preferred = SocketAddr::new(config.bind_ip, config.port);
         let listener = match TcpListener::bind(preferred).await {
@@ -93,11 +146,87 @@ impl ScreenServer {
         let (stop_tx, mut stop_rx) = watch::channel(false);
 
         let device_name = Arc::new(config.device_name);
+
+        // Bind companion HTTPS/WSS listener (`port + 1`, or ephemeral when `config.port == 0`).
+        let mut tls_addr = None;
+        let mut tls_handle = None;
+        if let Some(acceptor) = build_self_signed_tls_acceptor() {
+            let tls_preferred_port = if config.port == 0 {
+                0
+            } else {
+                local_addr.port().saturating_add(1)
+            };
+            let tls_listener = match TcpListener::bind(SocketAddr::new(config.bind_ip, tls_preferred_port)).await {
+                Ok(l) => Some(l),
+                Err(_) if tls_preferred_port != 0 => {
+                    TcpListener::bind(SocketAddr::new(config.bind_ip, 0)).await.ok()
+                }
+                Err(_) => None,
+            };
+            if let Some(tls_listener) = tls_listener
+                && let Ok(bound_tls) = tls_listener.local_addr()
+            {
+                tls_addr = Some(bound_tls);
+                let tls_port = Some(bound_tls.port());
+                let name_tls = device_name.clone();
+                let viewers_tls = active_viewers.clone();
+                let token_tls = auth_token.clone();
+                let mut stop_tls = stop_rx.clone();
+                tls_handle = Some(tokio::spawn(async move {
+                    tracing::info!(%bound_tls, "TREE LINK remote desktop HTTPS/WSS server listening");
+                    loop {
+                        tokio::select! {
+                            _ = stop_tls.changed() => {
+                                if *stop_tls.borrow() {
+                                    break;
+                                }
+                            }
+                            accepted = tls_listener.accept() => {
+                                match accepted {
+                                    Ok((tcp, peer_addr)) => {
+                                        let _ = tcp.set_nodelay(true);
+                                        let acceptor = acceptor.clone();
+                                        let name = name_tls.clone();
+                                        let viewers = viewers_tls.clone();
+                                        let token = token_tls.clone();
+                                        let stop_conn = stop_tls.clone();
+                                        tokio::spawn(async move {
+                                            match acceptor.accept(tcp).await {
+                                                Ok(tls_stream) => {
+                                                    handle_connection(
+                                                        tls_stream,
+                                                        peer_addr,
+                                                        name,
+                                                        token,
+                                                        viewers,
+                                                        tls_port,
+                                                        stop_conn,
+                                                    )
+                                                    .await;
+                                                }
+                                                Err(err) => {
+                                                    tracing::debug!(%peer_addr, %err, "TREE LINK TLS handshake failed");
+                                                }
+                                            }
+                                        });
+                                    }
+                                    Err(err) => {
+                                        tracing::warn!(%err, "TREE LINK TLS accept error");
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }));
+            }
+        }
+
+        let tls_port_opt = tls_addr.map(|a| a.port());
         let viewers_bg = active_viewers.clone();
         let token_bg = auth_token.clone();
 
         let task = tokio::spawn(async move {
-            tracing::info!(%local_addr, "TREE LINK remote desktop server listening");
+            tracing::info!(%local_addr, ?tls_port_opt, "TREE LINK remote desktop server listening");
             loop {
                 tokio::select! {
                     _ = stop_rx.changed() => {
@@ -114,7 +243,16 @@ impl ScreenServer {
                                 let token = token_bg.clone();
                                 let stop_conn = stop_rx.clone();
                                 tokio::spawn(async move {
-                                    handle_connection(stream, peer_addr, name, token, viewers, stop_conn).await;
+                                    handle_connection(
+                                        stream,
+                                        peer_addr,
+                                        name,
+                                        token,
+                                        viewers,
+                                        tls_port_opt,
+                                        stop_conn,
+                                    )
+                                    .await;
                                 });
                             }
                             Err(err) => {
@@ -129,15 +267,21 @@ impl ScreenServer {
 
         Ok(Self {
             local_addr,
+            tls_addr,
             active_viewers,
             auth_token,
             stop_tx,
             task: Mutex::new(Some(task)),
+            tls_task: Mutex::new(tls_handle),
         })
     }
 
     pub fn local_addr(&self) -> SocketAddr {
         self.local_addr
+    }
+
+    pub fn tls_addr(&self) -> Option<SocketAddr> {
+        self.tls_addr
     }
 
     /// Rotate or update the active group authentication token (e.g. after pairing or group change).
@@ -158,6 +302,9 @@ impl ScreenServer {
     pub fn stop(&self) {
         let _ = self.stop_tx.send(true);
         if let Some(handle) = self.task.lock().unwrap_or_else(|e| e.into_inner()).take() {
+            handle.abort();
+        }
+        if let Some(handle) = self.tls_task.lock().unwrap_or_else(|e| e.into_inner()).take() {
             handle.abort();
         }
     }
@@ -190,12 +337,13 @@ enum OutboundPacket {
     Pong(Vec<u8>),
 }
 
-async fn handle_connection(
-    mut stream: TcpStream,
+async fn handle_connection<S: AsyncRead + AsyncWrite + Unpin + Send + 'static>(
+    mut stream: S,
     peer_addr: SocketAddr,
     device_name: Arc<String>,
     auth_token: Arc<Mutex<String>>,
     active_viewers: Arc<AtomicUsize>,
+    tls_port: Option<u16>,
     mut stop_rx: watch::Receiver<bool>,
 ) {
     let req = match read_http_handshake(&mut stream).await {
@@ -230,6 +378,7 @@ async fn handle_connection(
             "hostCaptureSupported": crate::platform::host_capture_supported(),
             "permissions": crate::platform::permissions(),
             "interfaces": rank_local_interfaces(),
+            "tlsPort": tls_port,
         });
         let bytes = serde_json::to_vec(&body).unwrap_or_default();
         let _ = write_http_response(&mut stream, "200 OK", "application/json", &bytes).await;
@@ -272,9 +421,11 @@ async fn handle_connection(
     }
     let _viewer_guard = ViewerGuard(active_viewers);
 
-    let (mut reader, mut writer) = stream.into_split();
+    let (mut reader, mut writer) = tokio::io::split(stream);
     let (ctrl_tx, mut ctrl_rx) = mpsc::channel::<OutboundPacket>(64);
     let (video_tx, mut video_rx) = mpsc::channel::<Vec<u8>>(MAX_QUEUED_VIDEO_FRAMES);
+    let latest_jpeg = Arc::new(LatestFrameSlot::default());
+    let latest_jpeg_writer = latest_jpeg.clone();
 
     let writer_task = tokio::spawn(async move {
         loop {
@@ -301,6 +452,12 @@ async fn handle_connection(
                         None => break,
                     }
                 }
+                _ = latest_jpeg_writer.notify.notified() => {
+                    if let Some(bytes) = latest_jpeg_writer.take() {
+                        if write_ws_binary(&mut writer, &bytes).await.is_err() { break; }
+                        if writer.flush().await.is_err() { break; }
+                    }
+                }
             }
         }
         let _ = write_ws_close(&mut writer).await;
@@ -316,6 +473,7 @@ async fn handle_connection(
         displays: crate::platform::list_displays(),
         interfaces: rank_local_interfaces(),
         codecs: vec![VideoCodec::H264, VideoCodec::Hevc, VideoCodec::Jpeg],
+        tls_port,
     };
     if let Ok(text) = serde_json::to_string(&hello) {
         let _ = ctrl_tx.send(OutboundPacket::Text(text)).await;
@@ -333,11 +491,17 @@ async fn handle_connection(
             }
             msg = read_ws_message(&mut reader) => {
                 match msg {
+                    Ok(WsMessage::Binary(bytes)) => {
+                        if let Some(event) = decode_binary_input(&bytes) {
+                            injector.inject(event);
+                        }
+                    }
                     Ok(WsMessage::Text(text)) => {
                         match serde_json::from_str::<ClientMsg>(&text) {
                             Ok(ClientMsg::Subscribe(cfg)) => {
                                 active_capture = None;
-                                match start_capture_for_client(&cfg, video_tx.clone()) {
+                                let _ = latest_jpeg.take();
+                                match start_capture_for_client(&cfg, video_tx.clone(), latest_jpeg.clone()) {
                                     Ok(handle) => {
                                         active_capture = Some(handle);
                                         send_server_msg(
@@ -363,6 +527,7 @@ async fn handle_connection(
                             }
                             Ok(ClientMsg::StopStream) => {
                                 active_capture = None;
+                                let _ = latest_jpeg.take();
                                 send_server_msg(&ctrl_tx, &ServerMsg::StreamStopped).await;
                             }
                             Ok(ClientMsg::RequestKeyframe) => {
@@ -435,7 +600,7 @@ async fn handle_connection(
                     Ok(WsMessage::Ping(payload)) => {
                         let _ = ctrl_tx.try_send(OutboundPacket::Pong(payload));
                     }
-                    Ok(WsMessage::Pong(_)) | Ok(WsMessage::Binary(_)) => {}
+                    Ok(WsMessage::Pong(_)) => {}
                     Ok(WsMessage::Close) | Err(_) => break,
                 }
             }
@@ -449,13 +614,23 @@ async fn handle_connection(
     let _ = writer_task.await;
 }
 
-fn start_capture_for_client(cfg: &StreamConfig, video_tx: mpsc::Sender<Vec<u8>>) -> Result<Arc<CaptureHandle>, String> {
+fn start_capture_for_client(
+    cfg: &StreamConfig,
+    video_tx: mpsc::Sender<Vec<u8>>,
+    latest_jpeg: Arc<LatestFrameSlot>,
+) -> Result<Arc<CaptureHandle>, String> {
     let needs_keyframe = Arc::new(AtomicBool::new(false));
     let capture_slot: Arc<Mutex<Option<std::sync::Weak<CaptureHandle>>>> = Arc::new(Mutex::new(None));
     let slot_cb = capture_slot.clone();
     let needs_kf_cb = needs_keyframe.clone();
 
     let sink = Arc::new(move |frame: EncodedVideoFrame| {
+        if frame.codec == VideoCodec::Jpeg {
+            // Overwrite any unsent JPEG frame with the freshest capture (zero queue latency).
+            let wire = encode_video_frame(&frame);
+            latest_jpeg.put(wire);
+            return;
+        }
         if needs_kf_cb.load(Ordering::Acquire) && !frame.is_keyframe {
             return;
         }
@@ -529,7 +704,10 @@ fn sanitize_filename(raw: &str) -> Option<String> {
     Some(base.to_string())
 }
 
-async fn handle_clipboard_http(stream: &mut TcpStream, req: &crate::ws::HandshakeRequest) {
+async fn handle_clipboard_http<S: AsyncRead + AsyncWrite + Unpin>(
+    stream: &mut S,
+    req: &crate::ws::HandshakeRequest,
+) {
     if req.method == "GET" {
         let text = read_local_clipboard_text().await.unwrap_or_default();
         let body = serde_json::to_vec(&serde_json::json!({ "text": text })).unwrap_or_default();
@@ -561,7 +739,10 @@ async fn handle_clipboard_http(stream: &mut TcpStream, req: &crate::ws::Handshak
     let _ = write_http_response(stream, "405 Method Not Allowed", "text/plain", b"method not allowed").await;
 }
 
-async fn handle_upload_http(stream: &mut TcpStream, req: &crate::ws::HandshakeRequest) {
+async fn handle_upload_http<S: AsyncRead + AsyncWrite + Unpin>(
+    stream: &mut S,
+    req: &crate::ws::HandshakeRequest,
+) {
     let Some(raw_name) = req.query.get("name") else {
         let _ = write_http_response(stream, "400 Bad Request", "text/plain", b"missing name").await;
         return;
@@ -658,6 +839,7 @@ async fn write_local_clipboard_text(text: String) -> std::io::Result<()> {
 mod tests {
     use super::*;
     use tokio::io::AsyncReadExt;
+    use tokio::net::TcpStream;
 
     #[test]
     fn sanitize_filename_rejects_traversal() {
@@ -679,8 +861,9 @@ mod tests {
         .await
         .unwrap();
         let addr = server.local_addr();
+        assert!(server.tls_addr().is_some(), "companion TLS listener should bind");
 
-        // 1. Health endpoint works over plain HTTP.
+        // 1. Health endpoint works over plain HTTP and advertises tlsPort.
         let mut s = TcpStream::connect(addr).await.unwrap();
         s.write_all(b"GET /health HTTP/1.1\r\nHost: localhost\r\n\r\n")
             .await
@@ -690,6 +873,7 @@ mod tests {
         let resp_str = String::from_utf8_lossy(&resp);
         assert!(resp_str.contains("200 OK"));
         assert!(resp_str.contains("TestMac"));
+        assert!(resp_str.contains("\"tlsPort\""));
 
         // 2. Unauthorized WebSocket is rejected with 401.
         let mut bad = TcpStream::connect(addr).await.unwrap();

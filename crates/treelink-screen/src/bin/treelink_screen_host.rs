@@ -56,11 +56,15 @@ async fn main() -> anyhow::Result<()> {
     .await?;
 
     let bound_port = server.local_addr().port();
+    let tls_port = server.tls_addr().map(|a| a.port());
     println!("============================================================");
     println!("  TREE LINK Remote Desktop Host is running!");
     println!("============================================================");
     println!("  Device      : {device_name}");
-    println!("  Listen      : {}", server.local_addr());
+    println!("  Listen HTTP : {}", server.local_addr());
+    if let Some(addr) = server.tls_addr() {
+        println!("  Listen HTTPS: {addr}  (60fps Hardware H.264/HEVC WebCodecs)");
+    }
     println!(
         "  Permissions : screen_recording={}, accessibility={}",
         perms.screen_recording, perms.accessibility
@@ -75,7 +79,17 @@ async fn main() -> anyhow::Result<()> {
             d.display_id, d.name, d.pixel_width, d.pixel_height, d.scale_factor, d.is_primary
         );
     }
-    println!("  Open on Windows browser (Edge/Chrome) or TREE LINK app:");
+    if let Some(tp) = tls_port {
+        println!("  [Recommended] Ultra-low-latency 60fps Hardware H.264 (HTTPS):");
+        for iface in &interfaces {
+            println!(
+                "    -> https://{}:{}/   [{:?} / {}]",
+                iface.ip, tp, iface.link_class, iface.interface
+            );
+        }
+        println!("       (First visit in Edge/Chrome: click Advanced -> Proceed)");
+    }
+    println!("  Zero-cert compatible mode (HTTP GPU JPEG):");
     for iface in &interfaces {
         println!(
             "    -> http://{}:{}/   [{:?} / {}]",
