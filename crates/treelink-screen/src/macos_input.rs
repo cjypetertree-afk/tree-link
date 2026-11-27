@@ -80,14 +80,30 @@ impl InputInjector {
     }
 
     fn current_flags(&self) -> CGEventFlags {
+        // Set both generic CGEventFlags and IOKit device-specific left/right modifier bits
+        // so macOS apps (Terminal, VS Code, Spotlight, IME) recognize every shortcut accurately.
+        const LCTL: u64 = 0x0000_0001;
+        const LSHIFT: u64 = 0x0000_0002;
+        const RSHIFT: u64 = 0x0000_0004;
+        const LCMD: u64 = 0x0000_0008;
+        const RCMD: u64 = 0x0000_0010;
+        const LALT: u64 = 0x0000_0020;
+        const RALT: u64 = 0x0000_0040;
+        const RCTL: u64 = 0x0000_2000;
+
         let mut raw = 0u64;
         for &mac in &self.pressed_mods {
             match mac {
-                0x3B | 0x3E => raw |= CGEventFlags::MaskControl.0,
-                0x38 | 0x3C => raw |= CGEventFlags::MaskShift.0,
-                0x3A | 0x3D => raw |= CGEventFlags::MaskAlternate.0,
-                0x37 | 0x36 => raw |= CGEventFlags::MaskCommand.0,
+                0x3B => raw |= CGEventFlags::MaskControl.0 | LCTL,
+                0x3E => raw |= CGEventFlags::MaskControl.0 | RCTL,
+                0x38 => raw |= CGEventFlags::MaskShift.0 | LSHIFT,
+                0x3C => raw |= CGEventFlags::MaskShift.0 | RSHIFT,
+                0x3A => raw |= CGEventFlags::MaskAlternate.0 | LALT,
+                0x3D => raw |= CGEventFlags::MaskAlternate.0 | RALT,
+                0x37 => raw |= CGEventFlags::MaskCommand.0 | LCMD,
+                0x36 => raw |= CGEventFlags::MaskCommand.0 | RCMD,
                 0x3F => raw |= CGEventFlags::MaskSecondaryFn.0,
+                0x39 => raw |= CGEventFlags::MaskAlphaShift.0,
                 _ => {}
             }
         }
@@ -102,17 +118,25 @@ impl InputInjector {
     pub fn inject(&mut self, event: RemoteInputEvent) {
         match event {
             RemoteInputEvent::PointerMove { display_id, nx, ny } => {
+                let prev = self.last_point;
                 let p = self.map_point(display_id, nx, ny);
-                let (ty, btn) = if (self.pressed_buttons & (1 << 0)) != 0 {
-                    (CGEventType::LeftMouseDragged, CGMouseButton::Left)
+                let dx = (p.x - prev.x).round() as i64;
+                let dy = (p.y - prev.y).round() as i64;
+                let (ty, btn, btn_num) = if (self.pressed_buttons & (1 << 0)) != 0 {
+                    (CGEventType::LeftMouseDragged, CGMouseButton::Left, 0i64)
                 } else if (self.pressed_buttons & (1 << 1)) != 0 {
-                    (CGEventType::RightMouseDragged, CGMouseButton::Right)
+                    (CGEventType::RightMouseDragged, CGMouseButton::Right, 1i64)
                 } else if (self.pressed_buttons & (1 << 2)) != 0 {
-                    (CGEventType::OtherMouseDragged, CGMouseButton::Center)
+                    (CGEventType::OtherMouseDragged, CGMouseButton::Center, 2i64)
                 } else {
-                    (CGEventType::MouseMoved, CGMouseButton::Left)
+                    (CGEventType::MouseMoved, CGMouseButton::Left, 0i64)
                 };
                 if let Some(ev) = CGEvent::new_mouse_event(self.source.as_deref(), ty, p, btn) {
+                    CGEvent::set_integer_value_field(Some(&ev), CGEventField::MouseEventDeltaX, dx);
+                    CGEvent::set_integer_value_field(Some(&ev), CGEventField::MouseEventDeltaY, dy);
+                    if self.pressed_buttons != 0 {
+                        CGEvent::set_integer_value_field(Some(&ev), CGEventField::MouseEventButtonNumber, btn_num);
+                    }
                     CGEvent::set_flags(Some(&ev), self.current_flags());
                     self.post(&ev);
                 }

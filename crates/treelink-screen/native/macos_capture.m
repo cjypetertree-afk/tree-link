@@ -9,6 +9,7 @@
 #import <CoreMedia/CoreMedia.h>
 #import <CoreVideo/CoreVideo.h>
 #import <Foundation/Foundation.h>
+#import <IOKit/pwr_mgt/IOPMLib.h>
 #import <ImageIO/ImageIO.h>
 #import <ScreenCaptureKit/ScreenCaptureKit.h>
 #import <VideoToolbox/VideoToolbox.h>
@@ -149,6 +150,8 @@ size_t tl_list_displays(TLDisplayInfo *out_buf, size_t max_count) {
     VTCompressionSessionRef vt_session;
     CIContext *ci_context;
     CGColorSpaceRef jpeg_color_space;
+    IOPMAssertionID wake_assertion;
+    bool has_wake_assertion;
     dispatch_queue_t sample_queue;
     dispatch_queue_t encode_queue;
     SCStream *stream;
@@ -593,6 +596,17 @@ void *tl_capture_start(
         }
         session->stream = stream;
 
+        IOPMAssertionID assertion_id = 0;
+        if (IOPMAssertionCreateWithName(
+                kIOPMAssertionTypePreventUserIdleDisplaySleep,
+                kIOPMAssertionLevelOn,
+                CFSTR("TREE LINK active remote desktop session"),
+                &assertion_id
+            ) == kIOReturnSuccess) {
+            session->wake_assertion = assertion_id;
+            session->has_wake_assertion = true;
+        }
+
         __block NSError *start_err = nil;
         dispatch_semaphore_t start_sem = dispatch_semaphore_create(0);
         [stream startCaptureWithCompletionHandler:^(NSError * _Nullable error) {
@@ -657,6 +671,10 @@ void tl_capture_stop(void *handle) {
             }
             session->ci_context = nil;
         });
+        if (session->has_wake_assertion) {
+            IOPMAssertionRelease(session->wake_assertion);
+            session->has_wake_assertion = false;
+        }
         session->callback = NULL;
         session->user_data = NULL;
     }

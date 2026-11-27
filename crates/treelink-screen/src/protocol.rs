@@ -195,6 +195,8 @@ pub enum ClientMsg {
     Input { event: RemoteInputEvent },
     Ping { client_time_ms: u64 },
     ListDisplays,
+    CheckPermissions,
+    RequestPermissions,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -211,6 +213,9 @@ pub enum ServerMsg {
     },
     Displays {
         displays: Vec<DisplayDescriptor>,
+    },
+    Permissions {
+        permissions: PermissionSummary,
     },
     StreamStarted {
         display_id: u32,

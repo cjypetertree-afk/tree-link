@@ -390,6 +390,37 @@ async fn handle_connection(
                                     },
                                 ).await;
                             }
+                            Ok(ClientMsg::CheckPermissions) => {
+                                send_server_msg(
+                                    &ctrl_tx,
+                                    &ServerMsg::Permissions {
+                                        permissions: crate::platform::permissions(),
+                                    },
+                                ).await;
+                            }
+                            Ok(ClientMsg::RequestPermissions) => {
+                                let sr = crate::platform::request_screen_recording_permission();
+                                let ax = crate::platform::request_accessibility_permission();
+                                #[cfg(target_os = "macos")]
+                                {
+                                    if !ax {
+                                        let _ = std::process::Command::new("/usr/bin/open")
+                                            .arg("x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility")
+                                            .spawn();
+                                    } else if !sr {
+                                        let _ = std::process::Command::new("/usr/bin/open")
+                                            .arg("x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture")
+                                            .spawn();
+                                    }
+                                }
+                                let _ = (sr, ax);
+                                send_server_msg(
+                                    &ctrl_tx,
+                                    &ServerMsg::Permissions {
+                                        permissions: crate::platform::permissions(),
+                                    },
+                                ).await;
+                            }
                             Err(err) => {
                                 send_server_msg(
                                     &ctrl_tx,

@@ -54,6 +54,7 @@ export function RemotePane({ target, speakerMuted, onToggleAudioMute, onClose }:
 
   const [status, setStatus] = useState<'connecting' | 'streaming' | 'error' | 'closed'>('connecting');
   const [errorText, setErrorText] = useState<string | null>(null);
+  const [axGranted, setAxGranted] = useState<boolean | null>(null);
   const [displays, setDisplays] = useState<DisplayDescriptor[]>([]);
   const [displayId, setDisplayId] = useState<number>(0);
   const [presetId, setPresetId] = useState<string>(QUALITY_PRESETS[0].id);
@@ -178,7 +179,15 @@ export function RemotePane({ target, speakerMuted, onToggleAudioMute, onClose }:
               setErrorText('对端 Mac 尚未授予「屏幕录制」权限，请先在 Mac 的 TREE LINK 中授权');
               return;
             }
+            if (perms && typeof perms.accessibility === 'boolean') {
+              setAxGranted(perms.accessibility);
+            }
             subscribeStream(primary, presetId, codec);
+          } else if (msg.type === 'permissions') {
+            const perms = msg.permissions as { accessibility?: boolean } | undefined;
+            if (perms && typeof perms.accessibility === 'boolean') {
+              setAxGranted(perms.accessibility);
+            }
           } else if (msg.type === 'displays') {
             setDisplays((msg.displays as DisplayDescriptor[] | undefined) ?? []);
           } else if (msg.type === 'stream_started') {
@@ -320,6 +329,11 @@ export function RemotePane({ target, speakerMuted, onToggleAudioMute, onClose }:
           <span className="tl-dot" data-state={status} />
           <strong>{target.name}</strong>
           <span className="tl-badge" data-kind={target.linkClass}>{linkClassLabel(target.linkClass)}</span>
+          {axGranted === false && (
+            <Button size="sm" variant="accent" onClick={() => sendJson({ type: 'request_permissions' })}>
+              开启 Mac 辅助功能以操控
+            </Button>
+          )}
           <span className="tl-meta">{target.ip}:{target.port}</span>
           {resolution && <span className="tl-meta">{resolution}</span>}
           {status === 'streaming' && <span className="tl-meta">{fps} fps</span>}

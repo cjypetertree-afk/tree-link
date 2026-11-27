@@ -160,6 +160,26 @@
       background: rgba(56, 189, 248, 0.18);
       color: #7dd3fc;
     }
+    .badge.ok {
+      background: rgba(34, 197, 94, 0.2);
+      color: #86efac;
+    }
+    .badge.warn {
+      background: rgba(245, 158, 11, 0.22);
+      color: #fcd34d;
+    }
+    .ax-bar {
+      display: none;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      padding: 6px 12px;
+      font-size: 12px;
+      background: rgba(245, 158, 11, 0.16);
+      border-bottom: 1px solid rgba(245, 158, 11, 0.35);
+      color: #fde68a;
+    }
+    .ax-bar.show { display: flex; }
     .stage {
       position: relative;
       flex: 1;
@@ -375,6 +395,7 @@
             <span class="dot connecting"></span>
             <strong class="p-name"></strong>
             <span class="badge p-host"></span>
+            <span class="badge p-ctrl-badge">检测操控权限…</span>
             <span class="meta p-res"></span>
             <span class="meta p-fps"></span>
             <span class="meta p-rtt"></span>
@@ -389,15 +410,20 @@
               ${hasWebCodecs ? `<option value="h264" selected>H.264 硬件 60fps</option><option value="hevc">HEVC 硬件</option>` : ''}
             </select>
             <button class="p-mod active" title="Ctrl 与 ⌘Command 互换">Ctrl→⌘</button>
-            <button class="p-spot" title="发送 ⌘Space">⌘Space</button>
-            <button class="p-tab" title="发送 ⌘Tab">⌘Tab</button>
-            <button class="p-clip-push" title="发送文字到这台 Mac 的剪贴板">发剪贴板</button>
+            <button class="p-spot" title="发送 ⌘Space (Spotlight)">⌘Space</button>
+            <button class="p-tab" title="发送 ⌘Tab (切换应用)">⌘Tab</button>
+            <button class="p-ime" title="发送 ⌃Space (切换中英文输入法)">切输入法</button>
+            <button class="p-paste" title="把文字同步到 Mac 并直接粘贴 (⌘V)">同步粘贴</button>
             <button class="p-clip-pull" title="读取这台 Mac 的剪贴板">读剪贴板</button>
-            <button class="p-full" title="全屏">全屏</button>
+            <button class="p-full" title="全屏并锁定开发快捷键 (Ctrl+W/T/Esc)">全屏控屏</button>
             <button class="p-reconn" title="重连">重连</button>
             <button class="p-close" title="关闭">关闭</button>
           </div>
         </header>
+        <div class="ax-bar">
+          <span>⚠️ 目标 Mac 尚未勾选「辅助功能」权限，目前可看画面但鼠键操控会被拦截。</span>
+          <button class="primary p-req-ax">在 Mac 上打开辅助功能授权</button>
+        </div>
         <div class="stage" tabindex="0">
           <canvas></canvas>
           <div class="overlay">
@@ -423,6 +449,31 @@
       const selPreset = $('.p-preset');
       const selCodec = $('.p-codec');
       const btnMod = $('.p-mod');
+      const ctrlBadge = $('.p-ctrl-badge');
+      const axBar = $('.ax-bar');
+      let axGranted = false;
+      let permTimer = null;
+      let pendingMove = null;
+      let moveRaf = 0;
+
+      function updatePermissionsUi(perms) {
+        if (!perms) return;
+        axGranted = !!perms.accessibility;
+        if (axGranted) {
+          ctrlBadge.textContent = '鼠键操控就绪';
+          ctrlBadge.className = 'badge ok p-ctrl-badge';
+          axBar.classList.remove('show');
+          clearInterval(permTimer);
+          permTimer = null;
+        } else {
+          ctrlBadge.textContent = '需开启辅助功能';
+          ctrlBadge.className = 'badge warn p-ctrl-badge';
+          axBar.classList.add('show');
+          if (!permTimer) {
+            permTimer = setInterval(() => sendJson({ type: 'check_permissions' }), 2500);
+          }
+        }
+      }
 
       const baseHttp = `http://${host}`;
       const qsToken = token ? `?token=${encodeURIComponent(token)}` : '';
@@ -525,13 +576,17 @@
                   selDisplay.value = String(currentDisplay);
                 }
                 if (m.permissions && m.permissions.screenRecording === false) {
-                  setState('error', 'Mac 尚未开启「屏幕录制」权限', '请在 Mac 终端运行 --request-permissions 或在「系统设置 → 隐私与安全性 → 屏幕录制」中勾选终端/TREE LINK，然后重连。');
+                  setState('error', 'Mac 尚未开启「屏幕录制」权限', '请在 Mac 的「系统设置 → 隐私与安全性 → 录屏与系统录音」中勾选终端/TREE LINK，然后重连。');
                   return;
                 }
-                if (m.permissions && m.permissions.accessibility === false) {
-                  showToast(`${m.device_name || host} 尚未开启「辅助功能」权限，当前可看画面但键鼠注入会被系统拦截`);
-                }
+                updatePermissionsUi(m.permissions);
                 subscribe();
+              } else if (m.type === 'permissions') {
+                const wasGranted = axGranted;
+                updatePermissionsUi(m.permissions);
+                if (!wasGranted && m.permissions && m.permissions.accessibility) {
+                  showToast(`${$('.p-name').textContent} 辅助功能已生效！现在可直接点击和打字操控`);
+                }
               } else if (m.type === 'stream_started') {
                 setState('streaming');
               } else if (m.type === 'pong') {
@@ -596,6 +651,9 @@
 
       function disconnect(removeEl) {
         clearInterval(pingTimer);
+        clearInterval(permTimer);
+        permTimer = null;
+        if (moveRaf) { cancelAnimationFrame(moveRaf); moveRaf = 0; }
         if (ws) {
           try {
             if (ws.readyState === WebSocket.OPEN) {
@@ -639,17 +697,38 @@
         sendInput({ kind:'key', hid_code:HID_TAB, pressed:false });
         sendInput({ kind:'key', hid_code:HID_LGUI, pressed:false });
       };
-      $('.p-clip-push').onclick = async () => {
+      $('.p-ime').onclick = () => {
+        sendInput({ kind:'key', hid_code:HID_LCTRL, pressed:true });
+        sendInput({ kind:'key', hid_code:HID_SPACE, pressed:true });
+        sendInput({ kind:'key', hid_code:HID_SPACE, pressed:false });
+        sendInput({ kind:'key', hid_code:HID_LCTRL, pressed:false });
+        stage.focus();
+      };
+      $('.p-req-ax').onclick = () => {
+        sendJson({ type: 'request_permissions' });
+        showToast('已在 Mac 上弹出「辅助功能」设置窗口，勾选终端后会自动生效');
+      };
+      $('.p-paste').onclick = async () => {
         let text = '';
         try { text = await navigator.clipboard.readText(); } catch {}
-        if (!text) text = window.prompt('输入要写入该 Mac 剪贴板的文本：') || '';
+        if (!text) text = window.prompt('输入要发送并粘贴到该 Mac 的文本：') || '';
         if (!text) return;
         const r = await fetch(`${baseHttp}/api/clipboard${qsToken}`, {
           method: 'POST',
           headers: { 'Content-Type': 'text/plain; charset=utf-8' },
           body: text,
         });
-        showToast(r.ok ? `已同步 ${text.length} 字到 ${$('.p-name').textContent} 剪贴板` : '发送剪贴板失败');
+        if (r.ok) {
+          const hidV = hid(0x19);
+          sendInput({ kind:'key', hid_code:HID_LGUI, pressed:true });
+          sendInput({ kind:'key', hid_code:hidV, pressed:true });
+          sendInput({ kind:'key', hid_code:hidV, pressed:false });
+          sendInput({ kind:'key', hid_code:HID_LGUI, pressed:false });
+          showToast(`已同步并粘贴 ${text.length} 字到 ${$('.p-name').textContent}`);
+        } else {
+          showToast('发送剪贴板失败');
+        }
+        stage.focus();
       };
       $('.p-clip-pull').onclick = async () => {
         const r = await fetch(`${baseHttp}/api/clipboard${qsToken}`);
@@ -663,9 +742,15 @@
           window.prompt('Mac 剪贴板内容（按 Ctrl+C 复制）：', text);
         }
       };
-      $('.p-full').onclick = () => {
-        if (document.fullscreenElement === pane) document.exitFullscreen();
-        else pane.requestFullscreen?.();
+      $('.p-full').onclick = async () => {
+        if (document.fullscreenElement === pane) {
+          try { navigator.keyboard?.unlock?.(); } catch {}
+          await document.exitFullscreen();
+        } else {
+          await pane.requestFullscreen?.();
+          try { await navigator.keyboard?.lock?.(['Escape', 'MetaLeft', 'MetaRight', 'Tab', 'KeyW', 'KeyT', 'KeyN', 'KeyR']); } catch {}
+          stage.focus();
+        }
       };
       $('.p-reconn').onclick = connect;
       $('.o-retry').onclick = connect;
@@ -691,7 +776,18 @@
       canvas.oncontextmenu = (e) => e.preventDefault();
       canvas.onpointermove = (e) => {
         const pt = norm(e);
-        if (pt) sendInput({ kind:'pointer_move', display_id:currentDisplay, nx:pt.nx, ny:pt.ny });
+        if (!pt) return;
+        pendingMove = pt;
+        if (!moveRaf) {
+          moveRaf = requestAnimationFrame(() => {
+            moveRaf = 0;
+            if (pendingMove) {
+              const p = pendingMove;
+              pendingMove = null;
+              sendInput({ kind:'pointer_move', display_id:currentDisplay, nx:p.nx, ny:p.ny });
+            }
+          });
+        }
       };
       canvas.onpointerdown = (e) => {
         stage.focus();
